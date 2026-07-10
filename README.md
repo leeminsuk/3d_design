@@ -15,5 +15,6 @@
 | 05 | [군무 — Murmuration](https://raw.githack.com/leeminsuk/3d_design/design/05-murmuration/05-murmuration.html) | 십만 마리 찌르레기의 해질녘 군무, 커서는 매 | GPGPU 핑퐁 FloatType RT, 컬 노이즈 조향, 텍셀당 삼각형 렌더, 블룸 | [`design/05-murmuration`](https://github.com/leeminsuk/3d_design/tree/design/05-murmuration) |
 | 06 | [왕관을 쓴 행성 — The Ringed Giant](https://raw.githack.com/leeminsuk/3d_design/design/06-ringed-giant/06-ringed-giant.html) | 부서진 달의 기억으로 만든 왕관 | 해석적 광선-구/평면 교차(무왜곡), 일식 반그림자, 절차적 구름 띠, 대기 림 | [`design/06-ringed-giant`](https://github.com/leeminsuk/3d_design/tree/design/06-ringed-giant) |
 | 07 | [소원의 강 — River of Wishes](https://raw.githack.com/leeminsuk/3d_design/design/07-river-of-wishes/07-river-of-wishes.html) | 클릭하면 소원등이 떠오르는 밤강 | InstancedMesh 연등, 등불별 셰이더 수면 반영 스트릭, 레이캐스트 클릭 | [`design/07-river-of-wishes`](https://github.com/leeminsuk/3d_design/tree/design/07-river-of-wishes) |
+| 08 | [먹빛 산수 — Ink Mountains](https://raw.githack.com/leeminsuk/3d_design/design/08-ink-mountains/08-ink-mountains.html) | 다섯 번의 붓질, 다섯 겹의 산 | 붓 번짐(fbm 가장자리) 셰이더 레이어, 깊이 시차, 안개 평면, 정점 셰이더 학 | [`design/08-ink-mountains`](https://github.com/leeminsuk/3d_design/tree/design/08-ink-mountains) |
 
 > 각 작품은 렌더 검증(콘솔 에러 0, 스크린샷 확인) 후 커밋됩니다.
