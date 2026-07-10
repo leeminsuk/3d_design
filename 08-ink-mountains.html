@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>먹빛 산수 — Ink Mountains</title>
+<link rel="icon" href="data:,">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Nanum+Brush+Script&family=Gowun+Batang:wght@400;700&family=IBM+Plex+Mono:wght@300&display=swap" rel="stylesheet">
+<style>
+  :root { color-scheme: light; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow: hidden; background: #ebe3d2; }
+  canvas { display: block; }
+  .ui { position: fixed; inset: 0; pointer-events: none; z-index: 2; color: #33342f; }
+  .title { position: absolute; right: 56px; top: 48px; text-align: center; }
+  .title h1 { font-family: 'Nanum Brush Script', cursive; font-weight: 400;
+              writing-mode: vertical-rl; font-size: clamp(44px, 6.5vw, 76px);
+              letter-spacing: .12em; color: #2c2d29; }
+  .title .hanja { margin-top: 14px; font-family: 'Gowun Batang', serif;
+                  writing-mode: vertical-rl; font-size: 13px; letter-spacing: .55em;
+                  color: #8b8474; margin-left: auto; margin-right: auto; }
+  .caption { position: absolute; left: 52px; bottom: 46px; max-width: 300px;
+             font-family: 'Gowun Batang', serif; font-size: 13.5px; line-height: 2.2;
+             letter-spacing: .05em; color: #efe9db; word-break: keep-all;
+             text-shadow: 0 1px 10px rgba(30,30,26,.5); }
+  .seal { position: absolute; right: 56px; bottom: 46px; width: 46px; height: 46px;
+          background: #b23a2a; border-radius: 6px; display: grid; place-content: center;
+          color: #f4ead7; font-family: 'Gowun Batang', serif; font-weight: 700;
+          font-size: 17px; letter-spacing: .1em; line-height: 1.15; text-align: center;
+          box-shadow: inset 0 0 6px rgba(60,10,5,.35); transform: rotate(-2deg); }
+  .en { position: absolute; left: 52px; top: 50px;
+        font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 300;
+        letter-spacing: .5em; color: #a49a85; text-transform: uppercase; }
+  .fallback { position: fixed; inset: 0; display: none; place-content: center;
+              text-align: center; color: #33342f; background: #ebe3d2;
+              font-family: 'Gowun Batang', serif; padding: 24px; line-height: 2; z-index: 3; }
+  @media (max-width: 640px) {
+    .title { right: 26px; top: 30px; }
+    .en { left: 24px; top: 30px; }
+    .caption { left: 24px; bottom: 28px; font-size: 12px; max-width: 210px; }
+    .seal { right: 26px; bottom: 28px; width: 38px; height: 38px; font-size: 14px; }
+  }
+</style>
+</head>
+<body>
+<div class="ui">
+  <div class="en">Ink Mountains · Sumukhwa</div>
+  <div class="title">
+    <h1>먹빛 산수</h1>
+    <div class="hanja">墨山水圖</div>
+  </div>
+  <div class="caption">먹은 마르며 산이 되고,<br>비워 둔 종이는 안개가 된다.<br>
+    다섯 번의 붓질, 다섯 겹의 산.</div>
+  <div class="seal">묵<br>산</div>
+</div>
+<div class="fallback" id="fallback">
+  <div>이 페이지는 WebGL이 필요합니다.<br>최신 브라우저에서 다시 열어 주세요.</div>
+</div>
+
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.module.js"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+} catch (e) {
+  document.getElementById('fallback').style.display = 'grid';
+  throw e;
+}
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(42, innerWidth / innerHeight, 0.1, 300);
+camera.position.set(0, 2.5, 30);
+
+const NOISE = `
+float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float noise2(vec2 p){
+  vec2 i = floor(p), f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(i), hash(i + vec2(1, 0)), u.x),
+             mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), u.x), u.y);
+}
+float fbm(vec2 p){
+  float v = 0.0, a = 0.5;
+  for (int i = 0; i < 5; i++){ v += a * noise2(p); p = p * 2.11 + 13.7; a *= 0.5; }
+  return v;
+}`;
+
+/* ── 한지 배경 ─────────────────────────────────────────── */
+{
+  const g = new THREE.PlaneGeometry(2, 2);
+  const m = new THREE.ShaderMaterial({
+    depthWrite: false, depthTest: false,
+    uniforms: { uRes: { value: new THREE.Vector2(innerWidth, innerHeight) } },
+    vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.9999, 1.0); }`,
+    fragmentShader: NOISE + `
+      uniform vec2 uRes;
+      varying vec2 vUv;
+      void main(){
+        vec2 p = vUv * vec2(60.0, 34.0);
+        vec3 col = vec3(0.925, 0.895, 0.83);
+        /* 종이 섬유 */
+        col -= (noise2(p * 3.0) - 0.5) * 0.022;
+        col -= (noise2(p * vec2(14.0, 1.2)) - 0.5) * 0.014;
+        col -= pow(noise2(p * 8.0), 8.0) * 0.05;
+        /* 상단 은은한 하늘 먹 */
+        col -= vec3(0.05, 0.045, 0.03) * smoothstep(0.55, 1.05, vUv.y) * 0.5;
+        /* 주홍 해 */
+        vec2 sun = vUv - vec2(0.30, 0.78);
+        sun.x *= uRes.x / uRes.y;
+        float sd = length(sun * vec2(1.0, 1.0));
+        float sun_a = smoothstep(0.056, 0.049, sd);
+        vec3 verm = vec3(0.72, 0.26, 0.17);
+        col = mix(col, mix(col, verm, 0.88), sun_a * (0.85 + 0.15 * noise2(sun * 60.0)));
+        /* 가장자리 바램 */
+        float edge = smoothstep(0.0, 0.10, vUv.x) * smoothstep(1.0, 0.90, vUv.x)
+                   * smoothstep(0.0, 0.10, vUv.y) * smoothstep(1.0, 0.90, vUv.y);
+        col -= (1.0 - edge) * 0.028;
+        gl_FragColor = vec4(col, 1.0);
+      }`
+  });
+  const mesh = new THREE.Mesh(g, m);
+  mesh.frustumCulled = false;
+  mesh.renderOrder = -10;
+  scene.add(mesh);
+  addEventListener('resize', () => m.uniforms.uRes.value.set(innerWidth, innerHeight));
+}
+
+/* ── 먹 산 레이어 ──────────────────────────────────────── */
+const layers = [];
+function inkLayer(z, base, amp, tone, seedOff, inkiness) {
+  const g = new THREE.PlaneGeometry(150, 44);
+  const uniforms = {
+    uTone: { value: new THREE.Color(tone) },
+    uSeed: { value: seedOff },
+    uBase: { value: base },
+    uAmp:  { value: amp },
+    uInk:  { value: inkiness },
+    uTime: { value: 0 }
+  };
+  const m = new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false, uniforms,
+    vertexShader: `varying vec2 vUv; void main(){ vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+    fragmentShader: NOISE + `
+      uniform vec3 uTone; uniform float uSeed, uBase, uAmp, uInk, uTime;
+      varying vec2 vUv;
+      void main(){
+        float x = vUv.x * 9.0 + uSeed * 7.3;
+        /* 능선 */
+        float ridge = uBase
+          + fbm(vec2(x * 0.7, uSeed)) * uAmp
+          + fbm(vec2(x * 2.3, uSeed * 2.0)) * uAmp * 0.35
+          - 0.5 * uAmp;
+        float d = ridge - vUv.y;               /* >0: 능선 아래 */
+        /* 붓 가장자리: 번짐 */
+        float bleed = fbm(vec2(x * 5.0, vUv.y * 26.0 + uSeed * 9.0)) * 0.02 + 0.004;
+        float a = smoothstep(0.0, bleed, d);
+        /* 산 내부 먹 농담: 아래로 갈수록 옅게 (안개에 잠김) */
+        float fade = smoothstep(-0.02, 0.17, d);
+        a *= mix(1.0, 0.0, fade * (1.0 - uInk * 0.72));
+        /* 마른 붓 결 */
+        a *= 0.82 + 0.18 * fbm(vec2(x * 3.1, vUv.y * 9.0 + uSeed * 3.0));
+        /* 능선 바로 아래 진한 먹 라인 */
+        a += smoothstep(0.012, 0.0, abs(d - 0.004)) * 0.35;
+        gl_FragColor = vec4(uTone, clamp(a, 0.0, 1.0));
+      }`
+  });
+  const mesh = new THREE.Mesh(g, m);
+  mesh.position.z = z;
+  scene.add(mesh);
+  layers.push({ mesh, uniforms, z });
+}
+/* 먼 산(옅은 회청) → 가까운 산(짙은 먹) */
+inkLayer(-95, 0.50, 0.16, 0xb6bcbb, 1.0, 0.06);
+inkLayer(-72, 0.44, 0.20, 0x99a1a0, 2.7, 0.10);
+inkLayer(-50, 0.38, 0.24, 0x777f7e, 4.1, 0.16);
+inkLayer(-30, 0.30, 0.27, 0x555b58, 6.3, 0.26);
+inkLayer(-13, 0.20, 0.28, 0x33362f, 8.9, 0.42);
+
+/* ── 골짜기 안개 ───────────────────────────────────────── */
+const mists = [];
+function mistLayer(z, y, tone, speed, seedOff) {
+  const g = new THREE.PlaneGeometry(160, 12);
+  const uniforms = { uTime: { value: 0 }, uSeed: { value: seedOff }, uSpeed: { value: speed } };
+  const m = new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false, uniforms,
+    vertexShader: `varying vec2 vUv; void main(){ vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+    fragmentShader: NOISE + `
+      uniform float uTime, uSeed, uSpeed;
+      varying vec2 vUv;
+      void main(){
+        vec2 p = vec2(vUv.x * 7.0 + uTime * uSpeed + uSeed * 11.0, vUv.y * 2.2 + uSeed);
+        float n = fbm(p);
+        float a = smoothstep(0.32, 0.72, n)
+                * smoothstep(0.0, 0.35, vUv.y) * smoothstep(1.0, 0.55, vUv.y);
+        gl_FragColor = vec4(vec3(${tone}), a * 0.75);
+      }`
+  });
+  const mesh = new THREE.Mesh(g, m);
+  mesh.position.set(0, y, z);
+  scene.add(mesh);
+  mists.push({ uniforms });
+}
+mistLayer(-84, 3.0, '0.93, 0.905, 0.85', 0.014, 1.0);
+mistLayer(-60, 1.2, '0.925, 0.90, 0.845', 0.020, 3.2);
+mistLayer(-40, -0.6, '0.92, 0.895, 0.84', 0.027, 5.4);
+mistLayer(-20, -2.4, '0.915, 0.89, 0.835', 0.035, 7.6);
+
+/* ── 학 (5마리) ────────────────────────────────────────── */
+const CRANES = 5;
+const craneUniforms = { uTime: { value: 0 } };
+{
+  /* 학 1마리 = 삼각형 2개(양 날개) */
+  const verts = [], wing = [], phase = [], speed = [], off = [];
+  for (let c = 0; c < CRANES; c++) {
+    const ph = c * 17.3 + 3.0, sp = 0.9 + (c % 3) * 0.22, of = c * 31.7;
+    /* 왼 날개: 몸(0,0) 날개끝(-1,0.15) 꼬리(-0.15,-0.1) */
+    const tri = [
+      [0, 0, 0], [-0.9, 0.1, -1], [-0.12, -0.1, 0],
+      [0, 0, 0], [0.9, 0.1, 1], [0.12, -0.1, 0]
+    ];
+    const wings = [0, 1, 0, 0, 1, 0];
+    const sides = [0, -1, 0, 0, 1, 0];
+    for (let k = 0; k < 6; k++) {
+      verts.push(tri[k][0], tri[k][1], 0);
+      wing.push(wings[k] * (k < 3 ? -1 : 1));
+      phase.push(ph); speed.push(sp); off.push(of);
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+  g.setAttribute('aWing', new THREE.Float32BufferAttribute(wing, 1));
+  g.setAttribute('aPhase', new THREE.Float32BufferAttribute(phase, 1));
+  g.setAttribute('aSpeed', new THREE.Float32BufferAttribute(speed, 1));
+  g.setAttribute('aOff', new THREE.Float32BufferAttribute(off, 1));
+  g.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, -40), 200);
+  const m = new THREE.ShaderMaterial({
+    uniforms: craneUniforms, side: THREE.DoubleSide,
+    vertexShader: `
+      uniform float uTime;
+      attribute float aWing, aPhase, aSpeed, aOff;
+      void main(){
+        vec3 p = position * 1.25;
+        /* 날갯짓 */
+        float flap = sin(uTime * 5.0 + aPhase);
+        p.y += abs(aWing) * flap * 0.34;
+        /* 비행 경로: 왼→오 천천히, 사인 고도 */
+        float span = 90.0;
+        float x = mod(uTime * aSpeed * 1.7 + aOff, span) - span * 0.5;
+        float y = 6.5 + sin(x * 0.09 + aPhase) * 1.4 + sin(aPhase * 3.0) * 2.0;
+        vec3 world = vec3(x + p.x, y + p.y, -42.0 + p.z + sin(aPhase) * 6.0);
+        gl_Position = projectionMatrix * viewMatrix * vec4(world, 1.0);
+      }`,
+    fragmentShader: `void main(){ gl_FragColor = vec4(0.20, 0.21, 0.19, 0.9); }`,
+    transparent: true
+  });
+  scene.add(new THREE.Mesh(g, m));
+}
+
+/* ── 인터랙션·루프 ─────────────────────────────────────── */
+const mouse = new THREE.Vector2(0, 0);
+addEventListener('pointermove', e => {
+  mouse.set((e.clientX / innerWidth - 0.5) * 2, (e.clientY / innerHeight - 0.5) * 2);
+});
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+const t0 = performance.now();
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+function frame(t) {
+  for (const l of layers) l.uniforms.uTime.value = t;
+  for (const m of mists) m.uniforms.uTime.value = t;
+  craneUniforms.uTime.value = t;
+
+  /* 느린 가로 표류 + 마우스 시차 (레이어 깊이로 자연 시차) */
+  const drift = reduceMotion ? 0 : Math.sin(t * 0.03) * 2.0;
+  camera.position.x += (drift + mouse.x * 1.6 - camera.position.x) * 0.02;
+  camera.position.y += (2.5 - mouse.y * 0.8 - camera.position.y) * 0.02;
+  camera.lookAt(camera.position.x * 0.92, 2.0, -40);
+
+  renderer.render(scene, camera);
+}
+
+if (reduceMotion) {
+  frame(10);
+} else {
+  renderer.setAnimationLoop(() => frame((performance.now() - t0) / 1000));
+}
+</script>
+</body>
+</html>
