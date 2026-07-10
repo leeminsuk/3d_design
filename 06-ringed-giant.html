@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>왕관을 쓴 행성 — The Ringed Giant</title>
+<link rel="icon" href="data:,">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@200;700&family=IBM+Plex+Mono:wght@300&display=swap" rel="stylesheet">
+<style>
+  :root { color-scheme: dark; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow: hidden; background: #030408; }
+  canvas { display: block; }
+  .ui { position: fixed; inset: 0; pointer-events: none; z-index: 2;
+        font-family: 'Noto Serif KR', serif; color: #e9e4d8; }
+  .title { position: absolute; left: 48px; top: 46px; }
+  .title h1 { font-size: clamp(26px, 3.6vw, 40px); font-weight: 700;
+              letter-spacing: .3em; margin-right: -.3em; word-break: keep-all; }
+  .title .en { margin-top: 8px; font-family: 'IBM Plex Mono', monospace;
+               font-size: 10px; font-weight: 300; letter-spacing: .44em;
+               color: #8a8474; text-transform: uppercase; }
+  .caption { position: absolute; left: 48px; bottom: 46px; max-width: 330px;
+             font-weight: 200; font-size: 13.5px; line-height: 2.1;
+             letter-spacing: .05em; color: #b9b2a2; word-break: keep-all; }
+  .caption b { font-weight: 700; color: #e9e4d8; }
+  .data { position: absolute; right: 48px; bottom: 46px; text-align: right;
+          font-family: 'IBM Plex Mono', monospace; font-size: 11px;
+          font-weight: 300; line-height: 2.2; letter-spacing: .18em; color: #8a8474; }
+  .fallback { position: fixed; inset: 0; display: none; place-content: center;
+              text-align: center; color: #e9e4d8; background: #030408;
+              font-family: 'Noto Serif KR', serif; padding: 24px; line-height: 2; z-index: 3; }
+  @media (max-width: 640px) {
+    .title { left: 24px; top: 28px; }
+    .caption { left: 24px; bottom: 28px; font-size: 12px; max-width: 250px; }
+    .data { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="ui">
+  <div class="title">
+    <h1>왕관을 쓴 행성</h1>
+    <div class="en">The Ringed Giant</div>
+  </div>
+  <div class="caption">고리는 <b>부서진 달의 기억</b>이다.<br>
+    수십억 개의 얼음 조각이 저마다의 궤도를 돌며<br>하나의 왕관이 된다.</div>
+  <div class="data">
+    RING SPAN 1.7 – 3.2 R<br>
+    ECLIPSE SHADOWING · ANALYTIC<br>
+    NO LENS DISTORTION
+  </div>
+</div>
+<div class="fallback" id="fallback">
+  <div>이 페이지는 WebGL이 필요합니다.<br>최신 브라우저에서 다시 열어 주세요.</div>
+</div>
+
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.184.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+} catch (e) {
+  document.getElementById('fallback').style.display = 'grid';
+  throw e;
+}
+renderer.setPixelRatio(Math.min(devicePixelRatio, 1.75));
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+
+const uniforms = {
+  uTime:  { value: 0 },
+  uRes:   { value: new THREE.Vector2(innerWidth, innerHeight) },
+  uMouse: { value: new THREE.Vector2(0, 0) }
+};
+
+const frag = /* glsl */`
+precision highp float;
+uniform float uTime; uniform vec2 uRes; uniform vec2 uMouse;
+varying vec2 vUv;
+
+#define R_IN 1.70
+#define R_OUT 3.20
+
+float hash12(vec2 p){
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+float hash11(float n){ return fract(sin(n * 127.1) * 43758.5453); }
+float noise1(float x){
+  float i = floor(x), f = fract(x);
+  float u = f * f * (3.0 - 2.0 * f);
+  return mix(hash11(i), hash11(i + 1.0), u);
+}
+float noise2(vec2 p){
+  vec2 i = floor(p), f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash12(i), hash12(i + vec2(1, 0)), u.x),
+             mix(hash12(i + vec2(0, 1)), hash12(i + vec2(1, 1)), u.x), u.y);
+}
+float fbm(vec2 p){
+  float v = 0.0, a = 0.5;
+  for (int i = 0; i < 5; i++){ v += a * noise2(p); p = p * 2.13 + 19.7; a *= 0.5; }
+  return v;
+}
+
+/* 태양 방향 (고정 — 화면 좌상단 뒤쪽에서 비춘다) */
+const vec3 SUN = normalize(vec3(-0.72, 0.28, 0.16));
+const vec3 SUNCOL = vec3(1.0, 0.94, 0.84);
+
+/* ── 고리 반경 프로파일: 밀도(알파)와 색 ───────────────── */
+float ringDensity(float r){
+  float t = (r - R_IN) / (R_OUT - R_IN);
+  float bands = 0.0;
+  bands += noise1(r * 22.0) * 0.55;
+  bands += noise1(r * 90.0) * 0.30;
+  bands += noise1(r * 7.0) * 0.35;
+  /* 카시니 간극 */
+  bands *= 1.0 - smoothstep(0.015, 0.0, abs(t - 0.58)) * 0.92;
+  bands *= 1.0 - smoothstep(0.010, 0.0, abs(t - 0.30)) * 0.6;
+  /* 안팎 가장자리 페이드 */
+  bands *= smoothstep(0.0, 0.06, t) * smoothstep(1.0, 0.82, t);
+  return clamp(bands * 1.35, 0.0, 1.0);
+}
+
+/* 행성이 태양빛을 가리는가 (고리 위 점 p에서) — 반그림자 포함 */
+float planetShadow(vec3 p){
+  float sStar = -dot(p, SUN);            /* 태양 방향 최근접 매개변수 */
+  if (sStar < 0.0) return 1.0;           /* 태양 쪽에 행성 없음 */
+  float d2 = dot(p, p) - sStar * sStar;  /* 광선-중심 최근접 거리² */
+  float d = sqrt(max(d2, 0.0));
+  float fac = smoothstep(0.92, 1.15, d);
+  return mix(0.10, 1.0, fac);
+}
+
+/* 고리가 태양빛을 가리는가 (행성 표면 점 p에서) */
+float ringShadow(vec3 p){
+  if (abs(SUN.y) < 1e-4) return 1.0;
+  float s = -p.y / SUN.y;
+  if (s <= 0.0) return 1.0;
+  vec3 q = p + SUN * s;
+  float r = length(q.xz);
+  if (r < R_IN || r > R_OUT) return 1.0;
+  return 1.0 - ringDensity(r) * 0.82;
+}
+
+/* ── 행성 표면 ─────────────────────────────────────────── */
+vec3 planetSurface(vec3 n){
+  /* 위도 밴드 + 난류 */
+  float lat = n.y;
+  float turb = fbm(vec2(atan(n.z, n.x) * 1.6 + uTime * 0.008, lat * 5.5)) * 0.35;
+  float band = sin(lat * 14.0 + turb * 6.0 + 1.3)
+             + sin(lat * 23.0 + turb * 9.0) * 0.5;
+  band = band * 0.25 + 0.5;
+
+  vec3 cream  = vec3(0.93, 0.86, 0.72);
+  vec3 caramel= vec3(0.78, 0.62, 0.42);
+  vec3 rust   = vec3(0.60, 0.42, 0.30);
+  vec3 alb = mix(cream, caramel, band);
+  alb = mix(alb, rust, smoothstep(0.62, 0.95, band) * 0.55);
+  /* 극지방은 옅은 청회색 */
+  alb = mix(alb, vec3(0.72, 0.76, 0.78), smoothstep(0.55, 0.9, abs(lat)) * 0.3);
+  /* 대형 폭풍 타원 */
+  vec2 sc = vec2(atan(n.z, n.x) - 0.8, (lat + 0.32) * 3.4);
+  float storm = exp(-dot(sc, sc) * 14.0);
+  alb = mix(alb, vec3(0.88, 0.66, 0.5), storm * 0.8);
+  return alb;
+}
+
+vec3 stars(vec3 d){
+  vec3 col = vec3(0.0);
+  vec3 g = d * 110.0;
+  float h = hash12(floor(g.xy) + floor(g.z) * 61.7);
+  vec3 fp = fract(g) - 0.5;
+  float star = smoothstep(0.32, 0.0, length(fp)) * step(0.986, h);
+  col += vec3(0.95, 0.93, 0.9) * star * (0.3 + 8.0 * fract(h * 71.3));
+  /* 옅은 성운 물감 */
+  float neb = fbm(d.xy * 2.6 + 4.0) * fbm(d.zy * 2.2 - 2.0);
+  col += vec3(0.016, 0.014, 0.028) * neb * 1.6;
+  col += vec3(0.03, 0.016, 0.012) * pow(neb, 2.0) * 2.0;
+  return col;
+}
+
+void main(){
+  vec2 uv = (vUv * 2.0 - 1.0);
+  uv.x *= uRes.x / uRes.y;
+
+  /* 카메라: 고정 시점 + 아주 느린 호흡, 마우스 미세 시차 */
+  float drift = sin(uTime * 0.05) * 0.02;
+  vec3 ro = vec3(0.9 + uMouse.x * 0.4, 1.35 + uMouse.y * -0.3 + drift, 6.4);
+  vec3 ta = vec3(-0.25, -0.05, 0.0);
+  vec3 fw = normalize(ta - ro);
+  vec3 rt = normalize(cross(fw, vec3(0.0, 1.0, 0.0)));
+  vec3 up = cross(rt, fw);
+  vec3 rd = normalize(fw * 2.3 + rt * uv.x + up * uv.y);
+
+  /* ── 해석적 교차 ── */
+  /* 행성 (구, r=1) */
+  float b = dot(ro, rd);
+  float c = dot(ro, ro) - 1.0;
+  float disc = b * b - c;
+  float tP = 1e9;
+  if (disc > 0.0) { float s = -b - sqrt(disc); if (s > 0.0) tP = s; }
+
+  /* 고리 (y=0 평면) */
+  float tR = 1e9; float rR = 0.0;
+  if (abs(rd.y) > 1e-5) {
+    float s = -ro.y / rd.y;
+    if (s > 0.0) {
+      float r = length((ro + rd * s).xz);
+      if (r > R_IN && r < R_OUT) { tR = s; rR = r; }
+    }
+  }
+
+  vec3 col = vec3(0.0);
+  vec3 bg = stars(rd);
+
+  /* 행성 셰이딩 */
+  vec3 planetCol = vec3(0.0);
+  float atmo = 0.0;
+  if (tP < 1e8) {
+    vec3 p = ro + rd * tP;
+    vec3 n = normalize(p);
+    float dif = clamp(dot(n, SUN), 0.0, 1.0);
+    float terminator = smoothstep(-0.12, 0.25, dot(n, SUN));
+    vec3 alb = planetSurface(n);
+    float rsh = ringShadow(p);
+    planetCol = alb * SUNCOL * (dif * 1.1 + 0.02) * rsh;
+    /* 대기 림: 가장자리 산란 */
+    float fres = pow(1.0 - clamp(dot(n, -rd), 0.0, 1.0), 2.6);
+    planetCol += vec3(0.5, 0.62, 0.78) * fres * terminator * 0.35;
+    planetCol += vec3(0.95, 0.6, 0.3) * fres * smoothstep(0.3, -0.05, dot(n, SUN))
+               * smoothstep(-0.35, 0.0, dot(n, SUN)) * 0.5;   /* 터미네이터 노을 */
+    atmo = fres;
+  }
+
+  /* 고리 셰이딩 */
+  vec4 ringCol = vec4(0.0);
+  if (tR < 1e8) {
+    vec3 q = ro + rd * tR;
+    float den = ringDensity(rR);
+    float lit = planetShadow(q);
+    /* 조명면/이면 */
+    float sunSide = sign(SUN.y) == sign(-rd.y) ? 1.0 : 0.55;
+    float t = (rR - R_IN) / (R_OUT - R_IN);
+    vec3 ice = mix(vec3(0.88, 0.83, 0.74), vec3(0.66, 0.62, 0.58), t);
+    ice = mix(ice, vec3(0.55, 0.5, 0.47), smoothstep(0.56, 0.62, t) * 0.4);
+    vec3 rc = ice * SUNCOL * (0.10 + 0.85 * sunSide) * lit;
+    /* 전방 산란 반짝임 */
+    rc += SUNCOL * pow(clamp(dot(rd, SUN), 0.0, 1.0), 6.0) * 0.25 * den;
+    ringCol = vec4(rc, clamp(den * 1.25, 0.0, 1.0));
+  }
+
+  /* ── 합성 (가까운 것부터) ── */
+  if (tR < tP) {
+    vec3 behind = (tP < 1e8) ? planetCol : bg;
+    col = mix(behind, ringCol.rgb, ringCol.a);
+  } else if (tP < 1e8) {
+    col = planetCol;
+    /* 행성 뒤의 고리는 행성이 가림 — 별도 처리 불필요 */
+  } else {
+    col = mix(bg, ringCol.rgb, ringCol.a);
+  }
+
+  /* 행성 밖 대기 헤일로 */
+  if (tP > 1e8 && disc > -0.06 && disc < 0.0) {
+    float halo = smoothstep(-0.06, 0.0, disc);
+    col += vec3(0.45, 0.55, 0.75) * halo * 0.18;
+  }
+
+  /* 비네트 + 그레인 */
+  col *= 1.0 - smoothstep(0.7, 1.8, length(uv)) * 0.4;
+  col = col / (1.0 + col * 0.25);
+  col = pow(col, vec3(0.92));
+  col += (hash12(vUv * uRes + fract(uTime) * 43.1) - 0.5) * 0.012;
+
+  gl_FragColor = vec4(col, 1.0);
+}`;
+
+scene.add(new THREE.Mesh(
+  new THREE.PlaneGeometry(2, 2),
+  new THREE.ShaderMaterial({
+    uniforms,
+    vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position,1.0); }`,
+    fragmentShader: frag
+  })
+));
+
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+composer.addPass(new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.28, 0.7, 0.8));
+
+const mouseT = new THREE.Vector2(0, 0);
+addEventListener('pointermove', e => {
+  mouseT.set((e.clientX / innerWidth - 0.5) * 2, (e.clientY / innerHeight - 0.5) * 2);
+});
+addEventListener('resize', () => {
+  renderer.setSize(innerWidth, innerHeight);
+  composer.setSize(innerWidth, innerHeight);
+  uniforms.uRes.value.set(innerWidth, innerHeight);
+});
+
+const t0 = performance.now();
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+function tick() {
+  uniforms.uTime.value = (performance.now() - t0) / 1000;
+  uniforms.uMouse.value.lerp(mouseT, 0.03);
+  composer.render();
+}
+
+if (reduceMotion) {
+  uniforms.uTime.value = 5.0;
+  composer.render();
+} else {
+  renderer.setAnimationLoop(tick);
+}
+</script>
+</body>
+</html>
