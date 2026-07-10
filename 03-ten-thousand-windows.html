@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>만 개의 창 — Ten Thousand Windows</title>
+<link rel="icon" href="data:,">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@300;700&family=IBM+Plex+Mono:wght@300;500&display=swap" rel="stylesheet">
+<style>
+  :root { color-scheme: dark; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow: hidden; background: #060811; }
+  canvas { display: block; }
+  .ui { position: fixed; inset: 0; pointer-events: none; z-index: 2;
+        font-family: 'IBM Plex Sans KR', sans-serif; color: #d7dbe8; }
+  .title { position: absolute; left: 44px; top: 44px; }
+  .title h1 { font-size: clamp(26px, 3.8vw, 42px); font-weight: 700;
+              letter-spacing: .06em; line-height: 1.25; word-break: keep-all; }
+  .title .en { margin-top: 6px; font-family: 'IBM Plex Mono', monospace;
+               font-size: 10px; font-weight: 300; letter-spacing: .42em;
+               color: #6a7186; text-transform: uppercase; }
+  .board { position: absolute; right: 44px; bottom: 40px; text-align: right;
+           font-family: 'IBM Plex Mono', monospace; }
+  .board .clock { font-size: clamp(30px, 4.5vw, 46px); font-weight: 500;
+                  color: #f4f6ff; letter-spacing: .08em;
+                  font-variant-numeric: tabular-nums; }
+  .board .awake { margin-top: 8px; font-size: 12px; letter-spacing: .14em;
+                  color: #8b93ab; font-variant-numeric: tabular-nums; }
+  .board .awake b { color: #ffc46b; font-weight: 500; }
+  .caption { position: absolute; left: 44px; bottom: 40px; font-size: 13px;
+             font-weight: 300; line-height: 2; color: #8b93ab; word-break: keep-all;
+             max-width: 300px; }
+  .fallback { position: fixed; inset: 0; display: none; place-content: center;
+              text-align: center; color: #d7dbe8; background: #060811;
+              font-family: 'IBM Plex Sans KR', sans-serif; padding: 24px;
+              line-height: 2; z-index: 3; }
+  @media (max-width: 640px) {
+    .title { left: 22px; top: 26px; }
+    .caption { display: none; }
+    .board { right: 22px; bottom: 26px; }
+  }
+</style>
+</head>
+<body>
+<div class="ui">
+  <div class="title">
+    <h1>만 개의 창</h1>
+    <div class="en">Ten Thousand Windows · Seoul</div>
+  </div>
+  <div class="caption">밤이 깊을수록 도시는 하나씩 눈을 감는다.<br>
+    모든 창문은 저마다의 소등 시각을 가진 데이터다.</div>
+  <div class="board">
+    <div class="clock" id="clock">21:00</div>
+    <div class="awake">아직 깨어 있는 창 <b id="awake">0</b> / <span id="total">0</span></div>
+  </div>
+</div>
+<div class="fallback" id="fallback">
+  <div>이 페이지는 WebGL이 필요합니다.<br>최신 브라우저에서 다시 열어 주세요.</div>
+</div>
+
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.module.js"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+} catch (e) {
+  document.getElementById('fallback').style.display = 'grid';
+  throw e;
+}
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 300);
+
+/* ── 결정적 난수 (시드 고정 — 매번 같은 도시) ─────────── */
+let seed = 20260710;
+function rnd() { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; }
+
+/* ── 지형: 완만한 두 언덕 사이 분지 ───────────────────── */
+function ground(x, z) {
+  return 2.2 * Math.sin(x * 0.045 + 1.2) * Math.cos(z * 0.06)
+       + 1.4 * Math.sin(x * 0.11 - z * 0.07 + 3.0)
+       + Math.max(0, (Math.abs(x) - 26) * 0.16);   /* 가장자리로 갈수록 언덕 */
+}
+
+/* ── 건물 & 창문 데이터 생성 ──────────────────────────── */
+const buildings = [];   /* {x,z,w,d,h,rot} */
+const GRID = 9;
+for (let gx = -6; gx <= 6; gx++) {
+  for (let gz = -4; gz <= 2; gz++) {
+    if (rnd() < 0.16) continue;                    /* 빈 필지 */
+    const x = gx * GRID + (rnd() - 0.5) * 3.2;
+    const z = gz * GRID + (rnd() - 0.5) * 3.2;
+    const hill = ground(x, z);
+    const tall = Math.max(0, 1 - Math.abs(hill) * 0.35);
+    const floors = 4 + Math.floor(rnd() * (6 + tall * 20));   /* 언덕엔 저층 */
+    const h = floors * 0.62;
+    const w = 3.4 + rnd() * (rnd() < 0.3 ? 5.5 : 1.6);        /* 일부는 판상형 */
+    const d = 1.6 + rnd() * 1.2;
+    const rot = rnd() < 0.5 ? 0 : Math.PI / 2;
+    buildings.push({ x, z, w, d, h, rot, base: hill });
+  }
+}
+
+/* 건물 몸체 */
+const bodyGeo = new THREE.BoxGeometry(1, 1, 1);
+const bodyMat = new THREE.MeshBasicMaterial({ color: 0x0a0d19 });
+const bodyMesh = new THREE.InstancedMesh(bodyGeo, bodyMat, buildings.length);
+const M = new THREE.Matrix4(), Q = new THREE.Quaternion(), S = new THREE.Vector3(), P = new THREE.Vector3();
+buildings.forEach((b, i) => {
+  Q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), b.rot);
+  S.set(b.w, b.h, b.d);
+  P.set(b.x, b.base + b.h / 2, b.z);
+  M.compose(P, Q, S);
+  bodyMesh.setMatrixAt(i, M);
+});
+scene.add(bodyMesh);
+
+/* 창문: 건물 앞·뒤 면에 그리드 배치 — 인스턴스 1개 = 창 1개 */
+const winPos = [], winBed = [], winWarm = [], winSeed = [];
+const FLOOR_H = 0.62, WIN_W = 0.34, GAP_W = 0.55;
+for (const b of buildings) {
+  const cols = Math.max(2, Math.floor(b.w / GAP_W) - 1);
+  const rows = Math.max(2, Math.floor(b.h / FLOOR_H) - 1);
+  const cos = Math.cos(b.rot), sin = Math.sin(b.rot);
+  for (let f = 0; f < 2; f++) {                    /* 앞면·뒷면 */
+    const side = f === 0 ? 1 : -1;
+    for (let c = 0; c < cols; c++) {
+      for (let r = 0; r < rows; r++) {
+        if (rnd() < 0.18) continue;                /* 빈 창 */
+        const lx = (c + 0.5) / cols * b.w - b.w / 2;
+        const ly = (r + 0.7) * FLOOR_H;
+        const lz = side * (b.d / 2 + 0.012);
+        /* 로컬 → 월드 (y축 회전) */
+        const wx = b.x + lx * cos - lz * sin;
+        const wz = b.z + lx * sin + lz * cos;
+        winPos.push(wx, b.base + ly, wz, b.rot + (side < 0 ? Math.PI : 0));
+        /* 소등 시각: 21시~새벽 5시, 대부분 0~2시에 잔다 */
+        const u = rnd();
+        let bed = 21.5 + Math.pow(u, 1.6) * 6.5;   /* 21.5 ~ 28(=새벽4) */
+        if (rnd() < 0.06) bed = 29.5;              /* 밤샘하는 창 */
+        winBed.push(bed);
+        winWarm.push(rnd() < 0.62 ? 1 : 0);        /* 웜/쿨 */
+        winSeed.push(rnd() * 100);
+      }
+    }
+  }
+}
+const WIN_COUNT = winBed.length;
+document.getElementById('total').textContent = WIN_COUNT.toLocaleString('ko-KR');
+
+const winGeo = new THREE.PlaneGeometry(WIN_W, 0.30);
+const winMesh = new THREE.InstancedMesh(winGeo, null, WIN_COUNT);
+{
+  const E = new THREE.Euler();
+  for (let i = 0; i < WIN_COUNT; i++) {
+    E.set(0, winPos[i * 4 + 3], 0);
+    Q.setFromEuler(E);
+    P.set(winPos[i * 4], winPos[i * 4 + 1], winPos[i * 4 + 2]);
+    S.set(1, 1, 1);
+    M.compose(P, Q, S);
+    winMesh.setMatrixAt(i, M);
+  }
+}
+winGeo.setAttribute('aBed',  new THREE.InstancedBufferAttribute(new Float32Array(winBed), 1));
+winGeo.setAttribute('aWarm', new THREE.InstancedBufferAttribute(new Float32Array(winWarm), 1));
+winGeo.setAttribute('aSeed', new THREE.InstancedBufferAttribute(new Float32Array(winSeed), 1));
+
+const winUniforms = { uHour: { value: 21 }, uTime: { value: 0 } };
+winMesh.material = new THREE.ShaderMaterial({
+  uniforms: winUniforms,
+  vertexShader: `
+    attribute float aBed; attribute float aWarm; attribute float aSeed;
+    uniform float uHour; uniform float uTime;
+    varying float vOn; varying float vWarm; varying float vSeed;
+    void main(){
+      vWarm = aWarm; vSeed = aSeed;
+      float on = 1.0 - smoothstep(aBed - 0.12, aBed, uHour);
+      /* 잠들기 직전 뒤척임: 소등 30분 전 가끔 깜빡 */
+      float flick = step(0.92, sin(uTime * (2.0 + fract(aSeed) * 3.0) + aSeed * 7.0));
+      on *= 1.0 - flick * smoothstep(aBed - 0.5, aBed - 0.1, uHour) * 0.9;
+      vOn = on;
+      vec4 mv = modelViewMatrix * instanceMatrix * vec4(position, 1.0);
+      gl_Position = projectionMatrix * mv;
+    }`,
+  fragmentShader: `
+    varying float vOn; varying float vWarm; varying float vSeed;
+    void main(){
+      if (vOn < 0.01) discard;
+      vec3 warm = vec3(1.0, 0.72, 0.38);
+      vec3 cool = vec3(0.72, 0.86, 1.0);
+      vec3 c = mix(cool, warm, vWarm);
+      c *= 0.75 + 0.25 * fract(vSeed * 3.7);      /* 창마다 밝기 차 */
+      gl_FragColor = vec4(c * vOn * 1.35, 1.0);
+    }`
+});
+scene.add(winMesh);
+
+/* ── 지면 ─────────────────────────────────────────────── */
+{
+  const g = new THREE.PlaneGeometry(140, 90, 60, 40);
+  g.rotateX(-Math.PI / 2);
+  const pos = g.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    pos.setY(i, ground(pos.getX(i), pos.getZ(i)) - 0.12);
+  }
+  g.computeVertexNormals();
+  scene.add(new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color: 0x05070f })));
+}
+
+/* ── 가로등: 도로선을 따라 점점이 ─────────────────────── */
+{
+  const pts = [];
+  for (let gx = -6; gx <= 6; gx++) for (let s = 0; s < 26; s++) {
+    const x = gx * GRID + GRID / 2, z = -40 + s * 3.1;
+    if (rnd() < 0.5) pts.push(x + (rnd()-0.5)*0.4, ground(x, z) + 0.75, z);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+  scene.add(new THREE.Points(g, new THREE.PointsMaterial({
+    color: 0xff9c3f, size: 2.2, sizeAttenuation: false,
+    transparent: true, opacity: 0.75, depthWrite: false
+  })));
+}
+
+/* ── 하늘 + 달 ────────────────────────────────────────── */
+const skyUniforms = { uHour: { value: 21 } };
+{
+  const g = new THREE.SphereGeometry(180, 24, 16);
+  scene.add(new THREE.Mesh(g, new THREE.ShaderMaterial({
+    side: THREE.BackSide, depthWrite: false, uniforms: skyUniforms,
+    vertexShader: `varying vec3 vP; void main(){ vP = position;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+    fragmentShader: `
+      uniform float uHour; varying vec3 vP;
+      void main(){
+        float h = clamp(vP.y / 180.0, 0.0, 1.0);
+        float night = smoothstep(21.0, 24.5, uHour) - smoothstep(27.0, 29.5, uHour);
+        vec3 horizon = mix(vec3(0.10, 0.09, 0.16), vec3(0.05, 0.05, 0.10), night);
+        vec3 zenith  = mix(vec3(0.03, 0.04, 0.09), vec3(0.01, 0.01, 0.035), night);
+        vec3 dawn = vec3(0.16, 0.10, 0.13) * smoothstep(28.2, 29.5, uHour);
+        gl_FragColor = vec4(mix(horizon, zenith, pow(h, 0.7)) + dawn * (1.0 - h), 1.0);
+      }`
+  })));
+  /* 보름달: 글로우 스프라이트 */
+  const cv = document.createElement('canvas'); cv.width = cv.height = 256;
+  const ctx = cv.getContext('2d');
+  const grad = ctx.createRadialGradient(128, 128, 30, 128, 128, 128);
+  grad.addColorStop(0, 'rgba(255,250,235,1)');
+  grad.addColorStop(0.22, 'rgba(255,248,225,0.95)');
+  grad.addColorStop(0.35, 'rgba(240,235,215,0.28)');
+  grad.addColorStop(1, 'rgba(240,235,215,0)');
+  ctx.fillStyle = grad; ctx.fillRect(0, 0, 256, 256);
+  const moon = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: new THREE.CanvasTexture(cv), transparent: true, depthWrite: false, fog: false
+  }));
+  moon.scale.setScalar(34);
+  moon.position.set(-52, 58, -120);
+  scene.add(moon);
+}
+
+scene.fog = new THREE.Fog(0x060811, 30, 130);
+
+/* ── 카메라 + 인터랙션 ────────────────────────────────── */
+const mouse = new THREE.Vector2(0, 0);
+addEventListener('pointermove', e => {
+  mouse.x = (e.clientX / innerWidth - 0.5) * 2;
+  mouse.y = (e.clientY / innerHeight - 0.5) * 2;
+});
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+/* ── 시간 진행: 60초 = 21:00 → 05:30 ─────────────────── */
+const NIGHT_SEC = 60, H0 = 21, H1 = 29.5;
+const clockEl = document.getElementById('clock');
+const awakeEl = document.getElementById('awake');
+const bedArr = new Float32Array(winBed);
+
+function countAwake(hour) {              /* 결정적 판정 — 셰이더와 같은 기준 */
+  let n = 0;
+  for (let i = 0; i < bedArr.length; i++) if (bedArr[i] > hour) n++;
+  return n;
+}
+
+const t0 = performance.now();
+let lastCount = -1;
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+function frame(hour, t) {
+  winUniforms.uHour.value = hour;
+  winUniforms.uTime.value = t;
+  skyUniforms.uHour.value = hour;
+
+  const drift = reduceMotion ? 0 : Math.sin(t * 0.05) * 7;
+  camera.position.set(drift + mouse.x * 2.5, 13 - mouse.y * 1.8, 48);
+  camera.lookAt(drift * 0.35, 6.5, 0);
+
+  const hh = Math.floor(hour) % 24, mm = Math.floor((hour % 1) * 60);
+  clockEl.textContent = String(hh).padStart(2, '0') + ':' + String(mm).padStart(2, '0');
+  const n = countAwake(hour);
+  if (n !== lastCount) { awakeEl.textContent = n.toLocaleString('ko-KR'); lastCount = n; }
+
+  renderer.render(scene, camera);
+}
+
+if (reduceMotion) {
+  frame(23.5, 0);
+} else {
+  renderer.setAnimationLoop(() => {
+    const t = (performance.now() - t0) / 1000;
+    const hour = H0 + ((t % NIGHT_SEC) / NIGHT_SEC) * (H1 - H0);
+    frame(hour, t);
+  });
+}
+</script>
+</body>
+</html>
