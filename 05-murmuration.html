@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>군무 — Murmuration</title>
+<link rel="icon" href="data:,">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@300;600&family=IBM+Plex+Mono:wght@300&display=swap" rel="stylesheet">
+<style>
+  :root { color-scheme: dark; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow: hidden; background: #1a1022; }
+  canvas { display: block; }
+  .ui { position: fixed; inset: 0; pointer-events: none; z-index: 2;
+        font-family: 'Noto Serif KR', serif; color: #f3e4d5; }
+  .title { position: absolute; left: 48px; bottom: 52px; }
+  .title h1 { font-size: clamp(38px, 6vw, 72px); font-weight: 600;
+              letter-spacing: .34em; margin-right: -.34em;
+              text-shadow: 0 2px 30px rgba(20,8,20,.6); }
+  .title .sub { margin-top: 10px; font-weight: 300; font-size: 14px;
+                letter-spacing: .12em; color: #d9b8a6; word-break: keep-all; }
+  .title .en { margin-top: 6px; font-family: 'IBM Plex Mono', monospace;
+               font-size: 10px; letter-spacing: .5em; color: #a67f74;
+               text-transform: uppercase; }
+  .count { position: absolute; right: 48px; top: 44px; text-align: right;
+           font-family: 'IBM Plex Mono', monospace; font-size: 11px;
+           letter-spacing: .24em; color: #c79a86;
+           font-variant-numeric: tabular-nums; }
+  .count b { display: block; font-size: 26px; font-weight: 300; color: #f3e4d5;
+             letter-spacing: .1em; margin-bottom: 4px; }
+  .hint { position: absolute; right: 48px; bottom: 52px; text-align: right;
+          font-size: 12px; font-weight: 300; letter-spacing: .1em; color: #c79a86;
+          word-break: keep-all; }
+  .fallback { position: fixed; inset: 0; display: none; place-content: center;
+              text-align: center; color: #f3e4d5; background: #1a1022;
+              font-family: 'Noto Serif KR', serif; padding: 24px; line-height: 2; z-index: 3; }
+  @media (max-width: 640px) {
+    .title { left: 24px; bottom: 34px; }
+    .count { right: 24px; top: 26px; }
+    .hint { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="ui">
+  <div class="title">
+    <h1>군무</h1>
+    <div class="sub">해질녘, 십만 마리의 찌르레기가 하나의 생물처럼 움직인다</div>
+    <div class="en">Murmuration at Dusk</div>
+  </div>
+  <div class="count"><b id="n">102,400</b>STARLINGS · GPGPU</div>
+  <div class="hint">커서가 매(鷹)가 됩니다 — 새떼 속으로 들어가 보세요</div>
+</div>
+<div class="fallback" id="fallback">
+  <div>이 페이지는 WebGL2가 필요합니다.<br>최신 브라우저에서 다시 열어 주세요.</div>
+</div>
+
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.184.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+  if (!renderer.getContext().getExtension('EXT_color_buffer_float'))
+    throw new Error('no float RT');
+} catch (e) {
+  document.getElementById('fallback').style.display = 'grid';
+  throw e;
+}
+renderer.setPixelRatio(Math.min(devicePixelRatio, 1.75));
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+
+const TEX = 320;                      /* 320² = 102,400 마리 */
+const COUNT = TEX * TEX;
+document.getElementById('n').textContent = COUNT.toLocaleString('ko-KR');
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 600);
+camera.position.set(0, 6, 70);
+
+/* ══ GPGPU 셋업: 위치·속도 핑퐁 렌더타깃 ═══════════════ */
+const simScene = new THREE.Scene();
+const simCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+const quadGeo = new THREE.PlaneGeometry(2, 2);
+
+function makeRT() {
+  return new THREE.WebGLRenderTarget(TEX, TEX, {
+    type: THREE.FloatType, format: THREE.RGBAFormat,
+    minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter,
+    depthBuffer: false, stencilBuffer: false
+  });
+}
+let posA = makeRT(), posB = makeRT(), velA = makeRT(), velB = makeRT();
+
+/* 초기 데이터 */
+{
+  const init = new Float32Array(COUNT * 4);
+  for (let i = 0; i < COUNT; i++) {
+    const r = 18 * Math.cbrt(Math.random());
+    const th = Math.random() * Math.PI * 2, ph = Math.acos(2 * Math.random() - 1);
+    init[i*4]   = r * Math.sin(ph) * Math.cos(th);
+    init[i*4+1] = r * Math.sin(ph) * Math.sin(th) * 0.5 + 14;
+    init[i*4+2] = r * Math.cos(ph);
+    init[i*4+3] = Math.random();               /* 개체 시드 */
+  }
+  const tex = new THREE.DataTexture(init, TEX, TEX, THREE.RGBAFormat, THREE.FloatType);
+  tex.needsUpdate = true;
+  const cpMat = new THREE.MeshBasicMaterial({ map: tex });
+  const quad = new THREE.Mesh(quadGeo, cpMat);
+  simScene.add(quad);
+  renderer.setRenderTarget(posA); renderer.render(simScene, simCam);
+  simScene.remove(quad);
+
+  const vinit = new Float32Array(COUNT * 4);
+  for (let i = 0; i < COUNT; i++) {
+    vinit[i*4] = (Math.random()-0.5)*4; vinit[i*4+1] = (Math.random()-0.5)*2;
+    vinit[i*4+2] = (Math.random()-0.5)*4; vinit[i*4+3] = 0;
+  }
+  const vtex = new THREE.DataTexture(vinit, TEX, TEX, THREE.RGBAFormat, THREE.FloatType);
+  vtex.needsUpdate = true;
+  cpMat.map = vtex;
+  const q2 = new THREE.Mesh(quadGeo, cpMat);
+  simScene.add(q2);
+  renderer.setRenderTarget(velA); renderer.render(simScene, simCam);
+  simScene.remove(q2);
+  renderer.setRenderTarget(null);
+}
+
+const NOISE = `
+vec3 hash3(vec3 p){
+  p = vec3(dot(p, vec3(127.1, 311.7, 74.7)),
+           dot(p, vec3(269.5, 183.3, 246.1)),
+           dot(p, vec3(113.5, 271.9, 124.6)));
+  return -1.0 + 2.0 * fract(sin(p) * 43758.5453123);
+}
+float noise3(vec3 p){
+  vec3 i = floor(p), f = fract(p);
+  vec3 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(mix(dot(hash3(i), f),
+                     dot(hash3(i+vec3(1,0,0)), f-vec3(1,0,0)), u.x),
+                 mix(dot(hash3(i+vec3(0,1,0)), f-vec3(0,1,0)),
+                     dot(hash3(i+vec3(1,1,0)), f-vec3(1,1,0)), u.x), u.y),
+             mix(mix(dot(hash3(i+vec3(0,0,1)), f-vec3(0,0,1)),
+                     dot(hash3(i+vec3(1,0,1)), f-vec3(1,0,1)), u.x),
+                 mix(dot(hash3(i+vec3(0,1,1)), f-vec3(0,1,1)),
+                     dot(hash3(i+vec3(1,1,1)), f-vec3(1,1,1)), u.x), u.y), u.z);
+}
+vec3 curl(vec3 p){
+  const float e = 0.35;
+  float dy1 = noise3(p + vec3(0, e, 0)) - noise3(p - vec3(0, e, 0));
+  float dz1 = noise3(p + vec3(0, 0, e)) - noise3(p - vec3(0, 0, e));
+  float dx2 = noise3(p + vec3(e, 0, 0) + 31.4) - noise3(p - vec3(e, 0, 0) + 31.4);
+  float dz2 = noise3(p + vec3(0, 0, e) + 31.4) - noise3(p - vec3(0, 0, e) + 31.4);
+  float dx3 = noise3(p + vec3(e, 0, 0) - 71.3) - noise3(p - vec3(e, 0, 0) - 71.3);
+  float dy3 = noise3(p + vec3(0, e, 0) - 71.3) - noise3(p - vec3(0, e, 0) - 71.3);
+  return normalize(vec3(dy3 - dz1, dz2 - dx3, dx2 - dy1) + 1e-5);
+}`;
+
+/* 속도 갱신 패스 */
+const velUniforms = {
+  uPos: { value: null }, uVel: { value: null },
+  uTime: { value: 0 }, uDt: { value: 0.016 },
+  uCenter: { value: new THREE.Vector3(0, 14, 0) },
+  uHawk: { value: new THREE.Vector3(999, 999, 999) }
+};
+const velMat = new THREE.ShaderMaterial({
+  uniforms: velUniforms,
+  vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position,1.0); }`,
+  fragmentShader: NOISE + `
+    uniform sampler2D uPos; uniform sampler2D uVel;
+    uniform float uTime, uDt; uniform vec3 uCenter, uHawk;
+    varying vec2 vUv;
+    void main(){
+      vec4 pd = texture2D(uPos, vUv);
+      vec3 p = pd.xyz; float seed = pd.w;
+      vec3 v = texture2D(uVel, vUv).xyz;
+
+      /* 1. 흐름장: 컬 노이즈 (군무의 소용돌이) */
+      vec3 flow = curl(p * 0.045 + vec3(0.0, 0.0, uTime * 0.02)) * 8.0;
+
+      /* 2. 무리 중심으로의 응집 (거리 비례) */
+      vec3 toC = uCenter - p;
+      float dC = length(toC);
+      vec3 cohesion = toC / max(dC, 1.0) * smoothstep(6.0, 26.0, dC) * 18.0;
+
+      /* 3. 매 회피 */
+      vec3 fromHawk = p - uHawk;
+      float dH = length(fromHawk);
+      vec3 flee = fromHawk / max(dH, 0.5) * smoothstep(16.0, 0.0, dH) * 55.0;
+
+      /* 4. 지면 회피 */
+      float ground = smoothstep(9.0, 2.0, p.y) * 50.0;
+
+      /* 5. 개체 편차 */
+      vec3 jitter = hash3(vec3(seed * 91.7, seed * 47.3, uTime * 0.5)) * 2.2;
+
+      vec3 steer = flow + cohesion + flee + vec3(0.0, ground, 0.0) + jitter;
+      v += steer * uDt * 3.0;
+
+      /* 속도 한계 (매에게 쫓길 땐 더 빠르게) */
+      float vmax = 14.0 + smoothstep(16.0, 0.0, dH) * 12.0;
+      float sp = length(v);
+      v *= min(sp, vmax) / max(sp, 1e-5);
+
+      gl_FragColor = vec4(v, 1.0);
+    }`
+});
+const velQuad = new THREE.Mesh(quadGeo, velMat);
+
+/* 위치 갱신 패스 */
+const posUniforms = {
+  uPos: { value: null }, uVel: { value: null }, uDt: { value: 0.016 }
+};
+const posMat = new THREE.ShaderMaterial({
+  uniforms: posUniforms,
+  vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position,1.0); }`,
+  fragmentShader: `
+    uniform sampler2D uPos; uniform sampler2D uVel; uniform float uDt;
+    varying vec2 vUv;
+    void main(){
+      vec4 pd = texture2D(uPos, vUv);
+      vec3 v = texture2D(uVel, vUv).xyz;
+      gl_FragColor = vec4(pd.xyz + v * uDt, pd.w);
+    }`
+});
+const posQuad = new THREE.Mesh(quadGeo, posMat);
+
+function step(dt, t) {
+  velUniforms.uPos.value = posA.texture;
+  velUniforms.uVel.value = velA.texture;
+  velUniforms.uTime.value = t;
+  velUniforms.uDt.value = dt;
+  simScene.add(velQuad);
+  renderer.setRenderTarget(velB);
+  renderer.render(simScene, simCam);
+  simScene.remove(velQuad);
+
+  posUniforms.uPos.value = posA.texture;
+  posUniforms.uVel.value = velB.texture;
+  posUniforms.uDt.value = dt;
+  simScene.add(posQuad);
+  renderer.setRenderTarget(posB);
+  renderer.render(simScene, simCam);
+  simScene.remove(posQuad);
+
+  renderer.setRenderTarget(null);
+  [posA, posB] = [posB, posA];
+  [velA, velB] = [velB, velA];
+}
+
+/* ══ 새 렌더링: 텍셀당 삼각형 1개 ═══════════════════════ */
+const birdGeo = new THREE.BufferGeometry();
+{
+  const verts = new Float32Array(COUNT * 3 * 3);
+  const uvs = new Float32Array(COUNT * 3 * 2);
+  const corner = new Float32Array(COUNT * 3);
+  for (let i = 0; i < COUNT; i++) {
+    const u = ((i % TEX) + 0.5) / TEX;
+    const v = (Math.floor(i / TEX) + 0.5) / TEX;
+    for (let k = 0; k < 3; k++) {
+      uvs[(i*3 + k)*2] = u; uvs[(i*3 + k)*2 + 1] = v;
+      corner[i*3 + k] = k;
+    }
+  }
+  birdGeo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
+  birdGeo.setAttribute('aUv', new THREE.BufferAttribute(uvs, 2));
+  birdGeo.setAttribute('aCorner', new THREE.BufferAttribute(corner, 1));
+  birdGeo.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 14, 0), 500);
+}
+const birdUniforms = {
+  uPos: { value: null }, uVel: { value: null }, uTime: { value: 0 },
+  uSun: { value: new THREE.Vector3(-0.35, 0.12, -0.93) }
+};
+const birdMat = new THREE.ShaderMaterial({
+  uniforms: birdUniforms,
+  side: THREE.DoubleSide,
+  vertexShader: `
+    uniform sampler2D uPos; uniform sampler2D uVel; uniform float uTime;
+    attribute vec2 aUv; attribute float aCorner;
+    varying float vShade; varying float vSeed;
+    void main(){
+      vec4 pd = texture2D(uPos, aUv);
+      vec3 p = pd.xyz; vSeed = pd.w;
+      vec3 v = texture2D(uVel, aUv).xyz;
+      vec3 fwd = normalize(v + 1e-4);
+      vec3 side = normalize(cross(fwd, vec3(0.0, 1.0, 0.0)) + 1e-4);
+      vec3 up = cross(side, fwd);
+      /* 날갯짓: 개체 위상 */
+      float flap = sin(uTime * (9.0 + vSeed * 5.0) + vSeed * 40.0);
+      float span = 0.55, len = 0.45;
+      vec3 local;
+      if (aCorner < 0.5)      local =  fwd * len;                      /* 부리 */
+      else if (aCorner < 1.5) local = -fwd * len * 0.4 + side * span + up * flap * span * 0.8;
+      else                    local = -fwd * len * 0.4 - side * span + up * flap * span * 0.8;
+      vec3 world = p + local;
+      vShade = 0.4 + 0.6 * clamp(dot(up, vec3(0.0, 1.0, 0.0)), 0.0, 1.0);
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(world, 1.0);
+    }`,
+  fragmentShader: `
+    uniform vec3 uSun;
+    varying float vShade; varying float vSeed;
+    void main(){
+      vec3 body = mix(vec3(0.022, 0.015, 0.028), vec3(0.07, 0.04, 0.055), vSeed * 0.5);
+      body += vec3(0.22, 0.11, 0.07) * (1.0 - vShade) * 0.3;   /* 노을 립 */
+      gl_FragColor = vec4(body, 1.0);
+    }`
+});
+scene.add(new THREE.Mesh(birdGeo, birdMat));
+
+/* ══ 하늘 + 태양 + 대지 ════════════════════════════════ */
+{
+  const g = new THREE.SphereGeometry(400, 32, 20);
+  scene.add(new THREE.Mesh(g, new THREE.ShaderMaterial({
+    side: THREE.BackSide, depthWrite: false,
+    vertexShader: `varying vec3 vP; void main(){ vP = position;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+    fragmentShader: `
+      varying vec3 vP;
+      void main(){
+        float h = clamp(vP.y / 400.0 * 0.5 + 0.5, 0.0, 1.0);
+        vec3 zenith  = vec3(0.14, 0.07, 0.18);
+        vec3 mid     = vec3(0.48, 0.16, 0.22);
+        vec3 horizon = vec3(0.98, 0.52, 0.24);
+        vec3 col = h > 0.52 ? mix(mid, zenith, smoothstep(0.52, 0.9, h))
+                            : mix(horizon, mid, smoothstep(0.42, 0.52, h));
+        /* 태양 방향 글로우 */
+        vec3 d = normalize(vP);
+        vec3 sun = normalize(vec3(-0.35, 0.10, -0.93));
+        col += vec3(1.0, 0.55, 0.25) * pow(max(dot(d, sun), 0.0), 24.0) * 0.55;
+        col += vec3(1.0, 0.75, 0.4) * pow(max(dot(d, sun), 0.0), 260.0) * 1.3;
+        gl_FragColor = vec4(col, 1.0);
+      }`
+  })));
+
+  /* 대지: 어두운 갈대밭 실루엣 */
+  const gr = new THREE.Mesh(
+    new THREE.CylinderGeometry(400, 400, 26, 48, 1, true),
+    new THREE.MeshBasicMaterial({ color: 0x120a12, side: THREE.DoubleSide })
+  );
+  gr.position.y = -13.5;
+  scene.add(gr);
+  const cap = new THREE.Mesh(
+    new THREE.CircleGeometry(400, 48),
+    new THREE.MeshBasicMaterial({ color: 0x120a12 })
+  );
+  cap.rotation.x = -Math.PI / 2;
+  cap.position.y = -0.55;
+  scene.add(cap);
+}
+
+/* ══ 포스트: 미묘한 블룸 ═══════════════════════════════ */
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+composer.addPass(new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.35, 0.8, 0.75));
+
+/* ══ 무리 중심 이동 + 매(마우스) ═══════════════════════ */
+const center = new THREE.Vector3(0, 14, 0);
+const raycaster = new THREE.Raycaster();
+const ndc = new THREE.Vector2(9, 9);
+let hawkActive = false;
+addEventListener('pointermove', e => {
+  ndc.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+  hawkActive = true;
+});
+addEventListener('pointerleave', () => { hawkActive = false; });
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+  composer.setSize(innerWidth, innerHeight);
+});
+
+const t0 = performance.now();
+let lastT = 0;
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+function tick() {
+  const t = (performance.now() - t0) / 1000;
+  const dt = Math.min(t - lastT, 1 / 30);
+  lastT = t;
+
+  /* 무리 중심: 리사주 궤적 */
+  center.set(
+    Math.sin(t * 0.11) * 22 + Math.sin(t * 0.043 + 2.0) * 10,
+    18 + Math.sin(t * 0.07 + 1.0) * 5,
+    Math.sin(t * 0.083 + 4.0) * 14
+  );
+  velUniforms.uCenter.value.copy(center);
+
+  /* 매: 마우스 광선 위 무리중심과 가장 가까운 점 */
+  if (hawkActive) {
+    raycaster.setFromCamera(ndc, camera);
+    const cp = new THREE.Vector3();
+    raycaster.ray.closestPointToPoint(center, cp);
+    velUniforms.uHawk.value.copy(cp);
+  } else {
+    velUniforms.uHawk.value.set(999, 999, 999);
+  }
+
+  step(Math.max(dt, 0.001), t);
+
+  birdUniforms.uPos.value = posA.texture;
+  birdUniforms.uVel.value = velA.texture;
+  birdUniforms.uTime.value = t;
+
+  /* 카메라: 느린 궤도 + 무리 응시 */
+  const camAng = t * 0.02;
+  camera.position.set(Math.sin(camAng) * 80, 9 + Math.sin(t * 0.05) * 2, Math.cos(camAng) * 80);
+  camera.lookAt(center.x * 0.7, center.y * 1.0, center.z * 0.7);
+
+  composer.render();
+}
+
+if (reduceMotion) {
+  for (let i = 0; i < 150; i++) step(0.016, i * 0.016);
+  birdUniforms.uPos.value = posA.texture;
+  birdUniforms.uVel.value = velA.texture;
+  camera.lookAt(0, 14, 0);
+  composer.render();
+} else {
+  renderer.setAnimationLoop(tick);
+}
+</script>
+</body>
+</html>
