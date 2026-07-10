@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>달항아리 — Moon Jar</title>
+<link rel="icon" href="data:,">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Gowun+Batang:wght@400;700&family=IBM+Plex+Mono:wght@300&display=swap" rel="stylesheet">
+<style>
+  :root { color-scheme: light; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow: hidden; background: #efe9de; }
+  canvas { display: block; }
+  .ui { position: fixed; inset: 0; pointer-events: none; z-index: 2;
+        font-family: 'Gowun Batang', serif; color: #3a352c; }
+  .title { position: absolute; top: 44px; right: 48px; text-align: right; }
+  .title h1 { font-size: clamp(30px, 4.4vw, 50px); font-weight: 700;
+              letter-spacing: .3em; margin-right: -.3em; }
+  .title .hanja { margin-top: 8px; font-size: 14px; letter-spacing: .8em;
+                  margin-right: -.8em; color: #8d8474; }
+  .title .en { margin-top: 4px; font-family: 'IBM Plex Mono', monospace;
+               font-size: 10px; letter-spacing: .5em; margin-right: -.5em;
+               color: #a89f8d; text-transform: uppercase; }
+  .caption { position: absolute; left: 48px; bottom: 42px; font-size: 13.5px;
+             line-height: 2.1; color: #6b6355; word-break: keep-all; max-width: 320px;
+             text-shadow: 0 0 6px rgba(239,233,222,.95), 0 0 14px rgba(239,233,222,.8); }
+  .caption b { font-weight: 700; color: #3a352c; }
+  .hour { position: absolute; right: 48px; bottom: 42px;
+          font-family: 'IBM Plex Mono', monospace; font-size: 11px;
+          letter-spacing: .3em; color: #a89f8d; text-align: right;
+          text-shadow: 0 0 6px rgba(239,233,222,.95), 0 0 14px rgba(239,233,222,.8); }
+  .fallback { position: fixed; inset: 0; display: none; place-content: center;
+              text-align: center; font-family: 'Gowun Batang', serif; color: #3a352c;
+              background: #efe9de; padding: 24px; line-height: 2; z-index: 3; }
+  @media (max-width: 640px) {
+    .title { top: 28px; right: 24px; }
+    .caption { left: 24px; bottom: 64px; font-size: 12px; max-width: 240px; }
+    .hour { right: 24px; bottom: 28px; }
+  }
+</style>
+</head>
+<body>
+<div class="ui">
+  <div class="title">
+    <h1>달항아리</h1>
+    <div class="hanja">白磁大壺</div>
+    <div class="en">Moon Jar</div>
+  </div>
+  <div class="caption">완벽한 원이 아니어서 더 완전한 그릇.<br>
+    <b>하루의 해</b>가 항아리 둘레를 돌며<br>새벽·정오·석양의 빛으로 백자를 어루만진다.</div>
+  <div class="hour" id="hour">05:00 · 새벽</div>
+</div>
+<div class="fallback" id="fallback">
+  <div>이 페이지는 WebGL이 필요합니다.<br>최신 브라우저에서 다시 열어 주세요.</div>
+</div>
+
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.module.js"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ antialias: false });
+} catch (e) {
+  document.getElementById('fallback').style.display = 'grid';
+  throw e;
+}
+renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+
+const uniforms = {
+  uTime: { value: 0 },
+  uRes:  { value: new THREE.Vector2(innerWidth, innerHeight) },
+  uMouse:{ value: new THREE.Vector2(0.5, 0.5) },
+  uDay:  { value: 0 }   /* 0..1 하루 위상 */
+};
+
+const frag = /* glsl */`
+precision highp float;
+uniform float uTime; uniform vec2 uRes; uniform vec2 uMouse; uniform float uDay;
+varying vec2 vUv;
+
+/* ── 달항아리 프로파일: y(-1.05..1.15) → 반지름 ─────────── */
+float jarRadius(float y){
+  /* 몸통: 살짝 일그러진 구 (달항아리는 상하 접합으로 완전한 구가 아님) */
+  float body = 0.95 * sqrt(max(0.0, 1.0 - y * y * 0.92));
+  body *= 1.0 + 0.035 * sin(y * 2.6 + 0.7);         /* 물레 자국의 비대칭 */
+  /* 목·주둥이 */
+  float neck = smoothstep(0.62, 1.02, y);
+  float mouth = mix(body, 0.42 + 0.10 * smoothstep(0.95, 1.12, y), neck);
+  /* 굽 */
+  float foot = smoothstep(-0.72, -1.02, y);
+  return mix(mouth, 0.34, foot);
+}
+
+/* 회전체 SDF (근사 — 스텝 계수로 보정) */
+float sdJar(vec3 p){
+  float y = clamp(p.y, -1.05, 1.14);
+  float r = jarRadius(y);
+  float d = length(p.xz) - r;
+  /* 위·아래 마감 */
+  float capTop = p.y - 1.14;
+  float capBot = -1.05 - p.y;
+  return max(d, max(capTop, capBot));
+}
+
+float sdFloor(vec3 p){ return p.y + 1.05; }
+
+vec2 map(vec3 p){
+  float dj = sdJar(p);
+  float df = sdFloor(p);
+  return (dj < df) ? vec2(dj, 1.0) : vec2(df, 2.0);
+}
+
+vec3 calcNormal(vec3 p){
+  vec2 e = vec2(0.0015, 0.0);
+  return normalize(vec3(
+    map(p + e.xyy).x - map(p - e.xyy).x,
+    map(p + e.yxy).x - map(p - e.yxy).x,
+    map(p + e.yyx).x - map(p - e.yyx).x));
+}
+
+float softShadow(vec3 ro, vec3 rd){
+  float res = 1.0, t = 0.03;
+  for (int i = 0; i < 40; i++){
+    float h = map(ro + rd * t).x;
+    if (h < 0.001) return 0.0;
+    res = min(res, 6.0 * h / t);
+    t += clamp(h, 0.02, 0.25);
+    if (t > 7.0) break;
+  }
+  return clamp(res, 0.0, 1.0);
+}
+
+float calcAO(vec3 p, vec3 n){
+  float ao = 0.0, sca = 1.0;
+  for (int i = 1; i <= 5; i++){
+    float h = 0.028 * float(i * i);
+    ao += (h - map(p + n * h).x) * sca;
+    sca *= 0.72;
+  }
+  return clamp(1.0 - 1.5 * ao, 0.0, 1.0);
+}
+
+/* 하루 위상 → 태양색·높이 */
+vec3 sunColor(float d){
+  vec3 dawn  = vec3(1.00, 0.62, 0.48);
+  vec3 noon  = vec3(1.00, 0.98, 0.92);
+  vec3 dusk  = vec3(1.00, 0.52, 0.34);
+  float k = sin(d * 6.28318 - 1.5708) * 0.5 + 0.5;  /* 0=밤끝 1=정오 */
+  vec3 warm = (fract(d) < 0.5) ? dawn : dusk;
+  return mix(warm, noon, smoothstep(0.15, 0.85, k));
+}
+
+void main(){
+  vec2 uv = (vUv * 2.0 - 1.0);
+  uv.x *= uRes.x / uRes.y;
+
+  /* 카메라: 항아리를 살짝 내려다보는 고정 시점 + 미세 호흡 */
+  float wob = sin(uTime * 0.22) * 0.02;
+  vec3 ro = vec3(sin(wob) * 4.6, 0.72, cos(wob) * 4.6);
+  vec3 ta = vec3(0.0, 0.05, 0.0);
+  vec3 fw = normalize(ta - ro);
+  vec3 rt = normalize(cross(fw, vec3(0.0, 1.0, 0.0)));
+  vec3 up = cross(rt, fw);
+  vec3 rd = normalize(fw * 2.1 + rt * uv.x + up * uv.y);
+
+  /* 태양: 하루 위상으로 공전 (마우스 x로도 밀 수 있음) */
+  float ang = uDay * 6.28318 + (uMouse.x - 0.5) * 2.2;
+  float elev = 0.35 + 0.5 * (sin(uDay * 6.28318 - 1.5708) * 0.5 + 0.5);
+  vec3 lightDir = normalize(vec3(cos(ang), elev, sin(ang)));
+  vec3 lc = sunColor(uDay);
+
+  /* 배경: 한지 — 미세한 결 + 시간대 물듦 */
+  float paper = 0.0;
+  paper += sin(uv.x * 180.0 + uv.y * 40.0) * 0.006;
+  paper += sin(uv.y * 240.0 - uv.x * 90.0) * 0.005;
+  vec3 bg = vec3(0.937, 0.914, 0.871) + paper;
+  bg = mix(bg, bg * vec3(1.03, 0.97, 0.92), (lc.r - lc.g) * 1.4 * (0.5 - abs(uv.y * 0.4)));
+  bg -= smoothstep(0.2, 1.6, length(uv)) * 0.05;   /* 비네트 */
+
+  /* 레이마칭 */
+  float t = 0.0; float mat = 0.0;
+  for (int i = 0; i < 100; i++){
+    vec2 h = map(ro + rd * t);
+    if (h.x < 0.0012) { mat = h.y; break; }
+    t += h.x * 0.55;                 /* 근사 SDF 보정 계수 */
+    if (t > 14.0) break;
+  }
+
+  vec3 col = bg;
+  if (mat > 0.5) {
+    vec3 p = ro + rd * t;
+    vec3 n = calcNormal(p);
+    float sha = softShadow(p + n * 0.01, lightDir);
+    float ao = calcAO(p, n);
+    float dif = clamp(dot(n, lightDir), 0.0, 1.0);
+    float sky = clamp(0.5 + 0.5 * n.y, 0.0, 1.0);
+
+    if (mat < 1.5) {
+      /* ── 백자 ── */
+      vec3 glaze = vec3(0.965, 0.958, 0.930);
+      /* 유약 아래 은은한 청백 */
+      glaze = mix(glaze, vec3(0.905, 0.930, 0.935), smoothstep(0.3, -0.6, n.y) * 0.5);
+      vec3 ambCol = mix(vec3(0.94, 0.94, 0.96), lc, 0.30);  /* 그늘빛은 중성 */
+      col  = glaze * (0.46 * ambCol + 0.54 * dif * sha * lc);
+      col += glaze * sky * 0.22 * vec3(0.92, 0.96, 1.0);          /* 하늘광 */
+      col += glaze * clamp(-n.y, 0.0, 1.0) * 0.30 * vec3(0.94, 0.91, 0.86); /* 바닥 바운스 */
+      /* 서브서피스 근사: 빛 반대편 가장자리가 은근히 밝다 */
+      float rim = pow(1.0 - clamp(dot(n, -rd), 0.0, 1.0), 3.0);
+      float back = clamp(dot(n, -lightDir), 0.0, 1.0);
+      col += lc * rim * back * 0.18;
+      /* 유광 하이라이트 */
+      vec3 hf = normalize(lightDir - rd);
+      col += lc * pow(clamp(dot(n, hf), 0.0, 1.0), 90.0) * 0.55 * sha;
+      col *= 0.35 + 0.65 * ao;   /* 백자는 그늘도 희다 */
+    } else {
+      /* ── 바닥: 한지 위 그림자 ── */
+      col = bg * (0.55 + 0.45 * sha) * (0.8 + 0.2 * dif);
+      col *= 0.9 + 0.1 * ao;
+      /* 항아리가 바닥에 비치는 은은한 반사광 */
+      col += vec3(0.05) * clamp(1.0 - length(p.xz) * 0.5, 0.0, 1.0);
+    }
+    /* 공기 원근 */
+    col = mix(col, bg, smoothstep(6.0, 13.0, t));
+  }
+
+  /* 낮은 태양의 긴 빛줄기 느낌 (배경에만) */
+  col = pow(col, vec3(0.92));
+  gl_FragColor = vec4(col, 1.0);
+}`;
+
+const vert = `varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position, 1.0); }`;
+
+scene.add(new THREE.Mesh(
+  new THREE.PlaneGeometry(2, 2),
+  new THREE.ShaderMaterial({ uniforms, vertexShader: vert, fragmentShader: frag })
+));
+
+/* ── 인터랙션 ─────────────────────────────────────────── */
+addEventListener('pointermove', e => {
+  uniforms.uMouse.value.set(e.clientX / innerWidth, 1 - e.clientY / innerHeight);
+});
+addEventListener('resize', () => {
+  renderer.setSize(innerWidth, innerHeight);
+  uniforms.uRes.value.set(innerWidth, innerHeight);
+});
+
+const hourEl = document.getElementById('hour');
+const NAMES = [[5,'새벽'],[7,'아침'],[11,'한낮'],[14,'오후'],[17,'석양'],[20,'어스름']];
+function hourLabel(day){
+  const h = (5 + day * 24) % 24;               /* 05시 시작 */
+  let name = '새벽';
+  for (const [hh, nn] of NAMES) if (h >= hh - 0.01) name = nn;
+  const hi = Math.floor(h), mi = Math.floor((h - hi) * 60);
+  return String(hi).padStart(2,'0') + ':' + String(mi).padStart(2,'0') + ' · ' + name;
+}
+
+const t0 = performance.now();
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const DAY_SEC = 48;                             /* 48초 = 하루 */
+
+function tick(){
+  const t = (performance.now() - t0) / 1000;
+  uniforms.uTime.value = t;
+  const day = (window.__day ?? (t % DAY_SEC) / DAY_SEC);
+  uniforms.uDay.value = day;
+  hourEl.textContent = hourLabel(day);
+  renderer.render(scene, camera);
+}
+
+if (reduceMotion) {
+  uniforms.uDay.value = 0.28;                   /* 아침 빛 정지 화면 */
+  hourEl.textContent = hourLabel(0.28);
+  renderer.render(scene, camera);
+} else {
+  renderer.setAnimationLoop(tick);
+}
+</script>
+</body>
+</html>
