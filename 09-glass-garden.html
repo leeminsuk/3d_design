@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>유리 정원 — Glass Garden</title>
+<link rel="icon" href="data:,">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@1,400;1,600&family=Noto+Serif+KR:wght@200;600&family=IBM+Plex+Mono:wght@300&display=swap" rel="stylesheet">
+<style>
+  :root { color-scheme: dark; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow: hidden; background: #101014; }
+  canvas { display: block; }
+  .ui { position: fixed; inset: 0; pointer-events: none; z-index: 2; color: #e8e6e1; }
+  .title { position: absolute; left: 48px; top: 46px; }
+  .title h1 { font-family: 'Noto Serif KR', serif; font-weight: 600;
+              font-size: clamp(28px, 4vw, 44px); letter-spacing: .3em; }
+  .title .en { margin-top: 6px; font-family: 'Cormorant Garamond', serif;
+               font-style: italic; font-size: clamp(16px, 2vw, 22px); color: #9d97a8; }
+  .caption { position: absolute; left: 48px; bottom: 46px; max-width: 320px;
+             font-family: 'Noto Serif KR', serif; font-weight: 200;
+             font-size: 13.5px; line-height: 2.15; letter-spacing: .04em;
+             color: #a49eae; word-break: keep-all; }
+  .list { position: absolute; right: 48px; bottom: 46px; text-align: right;
+          font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 300;
+          line-height: 2.3; letter-spacing: .22em; color: #776f85;
+          text-transform: uppercase; }
+  .list i { font-style: normal; }
+  .fallback { position: fixed; inset: 0; display: none; place-content: center;
+              text-align: center; color: #e8e6e1; background: #101014;
+              font-family: 'Noto Serif KR', serif; padding: 24px; line-height: 2; z-index: 3; }
+  @media (max-width: 640px) {
+    .title { left: 24px; top: 28px; }
+    .caption { left: 24px; bottom: 28px; font-size: 12px; max-width: 230px; }
+    .list { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="ui">
+  <div class="title">
+    <h1>유리 정원</h1>
+    <div class="en">The Glass Garden</div>
+  </div>
+  <div class="caption">빛의 풀이 자라는 정원에 유리를 심었다.<br>
+    빛은 유리를 지나며 잠시 길을 잃고,<br>마우스를 따라 하이라이트가 흐른다.</div>
+  <div class="list">
+    <i>Ⅰ 에메랄드 매듭 · knot</i><br>
+    <i>Ⅱ 자수정 원석 · gem</i><br>
+    <i>Ⅲ 호박 프리즘 · prism</i><br>
+    <i>Ⅳ 무색 구 · sphere</i>
+  </div>
+</div>
+<div class="fallback" id="fallback">
+  <div>이 페이지는 WebGL이 필요합니다.<br>최신 브라우저에서 다시 열어 주세요.</div>
+</div>
+
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.184.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+} catch (e) {
+  document.getElementById('fallback').style.display = 'grid';
+  throw e;
+}
+renderer.setPixelRatio(Math.min(devicePixelRatio, 1.75));
+renderer.setSize(innerWidth, innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x101014);
+const camera = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 0.1, 100);
+camera.position.set(0, 3.4, 13);
+
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+scene.environmentIntensity = 0.4;
+
+/* ── 무대 ─────────────────────────────────────────────── */
+{
+  /* 뒷배경: 은은한 그라데이션 벽 */
+  const wall = new THREE.Mesh(
+    new THREE.PlaneGeometry(80, 40),
+    new THREE.ShaderMaterial({
+      vertexShader: `varying vec2 vUv; void main(){ vUv = uv;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+      fragmentShader: `
+        varying vec2 vUv;
+        void main(){
+          float d = distance(vUv, vec2(0.5, 0.42));
+          vec3 col = mix(vec3(0.030, 0.028, 0.040), vec3(0.007, 0.007, 0.011), smoothstep(0.08, 0.75, d));
+          gl_FragColor = vec4(col, 1.0);
+        }`
+    })
+  );
+  wall.position.set(0, 6, -14);
+  scene.add(wall);
+
+  /* 바닥: 매끈한 검은 대리석 느낌 */
+  const floor = new THREE.Mesh(
+    new THREE.CircleGeometry(30, 64),
+    new THREE.MeshStandardMaterial({ color: 0x0a0a0d, metalness: 0.35, roughness: 0.48 })
+  );
+  floor.rotation.x = -Math.PI / 2;
+  scene.add(floor);
+
+  /* 빛풀(光草): 바닥에서 자라는 빛의 줄기들 — 유리가 굴절시킬 대상 */
+  const reedCols = [
+    new THREE.Color(1.0, 0.92, 0.78), new THREE.Color(1.0, 0.72, 0.42),
+    new THREE.Color(0.62, 0.78, 1.0), new THREE.Color(0.85, 0.62, 1.0),
+    new THREE.Color(1.0, 0.55, 0.62), new THREE.Color(0.55, 1.0, 0.8)
+  ];
+  let rseed = 42;
+  const rrnd = () => { rseed = (rseed * 1664525 + 1013904223) >>> 0; return rseed / 4294967296; };
+  const reedGeo = new THREE.PlaneGeometry(1, 1);
+  reedGeo.translate(0, 0.5, 0);            /* 밑동 기준 */
+  const reedMat = new THREE.ShaderMaterial({
+    transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
+    uniforms: { uTime: { value: 0 } },
+    vertexShader: `
+      uniform float uTime;
+      attribute vec3 aCol; attribute float aPhase;
+      varying vec2 vUv; varying vec3 vCol;
+      void main(){
+        vUv = uv; vCol = aCol;
+        vec4 wp = instanceMatrix * vec4(position, 1.0);
+        wp.x += sin(uTime * 0.7 + aPhase) * position.y * 0.14;   /* 흔들림 */
+        gl_Position = projectionMatrix * viewMatrix * wp;
+      }`,
+    fragmentShader: `
+      varying vec2 vUv; varying vec3 vCol;
+      void main(){
+        float core = smoothstep(0.5, 0.12, abs(vUv.x - 0.5));
+        float fade = smoothstep(1.0, 0.25, vUv.y) * (0.35 + 0.65 * smoothstep(0.0, 0.12, vUv.y));
+        gl_FragColor = vec4(vCol * 1.35, core * fade * 0.6);
+      }`
+  });
+  const REEDS = 28;
+  const reeds = new THREE.InstancedMesh(reedGeo, reedMat, REEDS);
+  const rCols = new Float32Array(REEDS * 3), rPh = new Float32Array(REEDS);
+  const M4 = new THREE.Matrix4(), Q4 = new THREE.Quaternion(), S4 = new THREE.Vector3(), P4 = new THREE.Vector3();
+  for (let i = 0; i < REEDS; i++) {
+    const behind = rrnd() < 0.75;
+    const x = (rrnd() - 0.5) * 26;
+    const z = behind ? -3.5 - rrnd() * 8 : 3.2 + rrnd() * 2.5;
+    const h = 1.5 + rrnd() * 3.4;
+    P4.set(x, 0, z);
+    S4.set(0.10 + rrnd() * 0.14, h, 1);
+    M4.compose(P4, Q4, S4);
+    reeds.setMatrixAt(i, M4);
+    const c = reedCols[Math.floor(rrnd() * reedCols.length)];
+    rCols[i*3] = c.r; rCols[i*3+1] = c.g; rCols[i*3+2] = c.b;
+    rPh[i] = rrnd() * 6.28;
+  }
+  reedGeo.setAttribute('aCol', new THREE.InstancedBufferAttribute(rCols, 3));
+  reedGeo.setAttribute('aPhase', new THREE.InstancedBufferAttribute(rPh, 1));
+  reeds.frustumCulled = false;
+  scene.add(reeds);
+  window.__reedMat = reedMat;
+}
+
+/* ── 유리 조형물 ──────────────────────────────────────── */
+function glass(color, atten, thick) {
+  return new THREE.MeshPhysicalMaterial({
+    color, metalness: 0, roughness: 0.06,
+    transmission: 1.0, thickness: thick, ior: 1.52,
+    attenuationColor: new THREE.Color(atten), attenuationDistance: 2.6,
+    clearcoat: 1.0, clearcoatRoughness: 0.08,
+    specularIntensity: 1.0, envMapIntensity: 0.55
+  });
+}
+
+const pieces = [];
+function addPiece(mesh, x, z, spin, caustic) {
+  mesh.position.set(x, mesh.userData.h ?? 1.6, z);
+  scene.add(mesh);
+  pieces.push({ mesh, spin });
+
+  /* 가짜 커스틱: 바닥의 색 빛 웅덩이 */
+  const cv = document.createElement('canvas'); cv.width = cv.height = 128;
+  const ctx = cv.getContext('2d');
+  const gr = ctx.createRadialGradient(64, 64, 6, 64, 64, 64);
+  gr.addColorStop(0, caustic + '0.5)');
+  gr.addColorStop(0.5, caustic + '0.16)');
+  gr.addColorStop(1, caustic + '0)');
+  ctx.fillStyle = gr; ctx.fillRect(0, 0, 128, 128);
+  const spr = new THREE.Mesh(
+    new THREE.PlaneGeometry(3.6, 3.6),
+    new THREE.MeshBasicMaterial({
+      map: new THREE.CanvasTexture(cv), transparent: true,
+      blending: THREE.AdditiveBlending, depthWrite: false
+    })
+  );
+  spr.rotation.x = -Math.PI / 2;
+  spr.position.set(x, 0.015, z);
+  scene.add(spr);
+  pieces[pieces.length - 1].caustic = spr;
+}
+
+/* Ⅰ 에메랄드 매듭 */
+{
+  const m = new THREE.Mesh(
+    new THREE.TorusKnotGeometry(0.85, 0.3, 200, 32),
+    glass(0xbfffe8, 0x0fae72, 1.4)
+  );
+  m.userData.h = 1.75;
+  addPiece(m, -3.4, 0.4, 0.14, 'rgba(40,220,150,');
+}
+/* Ⅱ 자수정 원석 */
+{
+  const g = new THREE.IcosahedronGeometry(1.15, 0);
+  const m = new THREE.Mesh(g, glass(0xe4c8ff, 0x7a3cc8, 1.8));
+  m.userData.h = 1.35;
+  addPiece(m, 0.1, -1.2, 0.10, 'rgba(170,110,255,');
+}
+/* Ⅲ 호박 프리즘 */
+{
+  const m = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.72, 0.72, 2.9, 6),
+    glass(0xffe2b0, 0xc87818, 1.5)
+  );
+  m.userData.h = 1.5;
+  addPiece(m, 3.5, 0.2, 0.08, 'rgba(255,170,60,');
+}
+/* Ⅳ 무색 구 */
+{
+  const m = new THREE.Mesh(
+    new THREE.SphereGeometry(0.85, 48, 48),
+    glass(0xffffff, 0xd8e4f0, 1.2)
+  );
+  m.userData.h = 0.87;
+  addPiece(m, 1.6, 2.3, 0.05, 'rgba(210,225,255,');
+}
+
+/* ── 조명 ─────────────────────────────────────────────── */
+const key = new THREE.SpotLight(0xfff4e4, 130, 60, Math.PI / 5, 0.45, 1.8);
+key.position.set(5, 12, 7);
+scene.add(key);
+scene.add(key.target);
+
+const rimA = new THREE.PointLight(0x7a6cff, 60, 40, 2);
+rimA.position.set(-8, 4, -5);
+scene.add(rimA);
+const rimB = new THREE.PointLight(0xff7a9a, 34, 40, 2);
+rimB.position.set(8, 2.5, -6);
+scene.add(rimB);
+
+/* ── 포스트 ───────────────────────────────────────────── */
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+composer.addPass(new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.35, 0.7, 0.82));
+composer.addPass(new OutputPass());
+
+/* ── 인터랙션 ─────────────────────────────────────────── */
+const mouse = new THREE.Vector2(0, 0);
+addEventListener('pointermove', e => {
+  mouse.set((e.clientX / innerWidth - 0.5) * 2, (e.clientY / innerHeight - 0.5) * 2);
+});
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+  composer.setSize(innerWidth, innerHeight);
+});
+
+const t0 = performance.now();
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+function frame(t) {
+  if (window.__reedMat) window.__reedMat.uniforms.uTime.value = t;
+  for (const p of pieces) {
+    if (!reduceMotion) {
+      p.mesh.rotation.y = t * p.spin;
+      p.mesh.rotation.x = Math.sin(t * p.spin * 0.6) * 0.18;
+    }
+    if (p.caustic) {
+      const s = 1.0 + Math.sin(t * 0.8 + p.mesh.position.x * 3.0) * 0.07;
+      p.caustic.scale.setScalar(s);
+      p.caustic.rotation.z = t * 0.05;
+    }
+  }
+
+  /* 키 라이트가 커서를 따라 흐른다 */
+  key.position.x += (mouse.x * 9 + 3 - key.position.x) * 0.03;
+  key.position.z += (mouse.y * 4 + 6 - key.position.z) * 0.03;
+
+  camera.position.x += (mouse.x * 1.4 - camera.position.x) * 0.02;
+  camera.position.y += (3.4 - mouse.y * 1.0 - camera.position.y) * 0.02;
+  camera.lookAt(0, 1.15, 0);
+
+  composer.render();
+}
+
+if (reduceMotion) {
+  frame(0);
+} else {
+  renderer.setAnimationLoop(() => frame((performance.now() - t0) / 1000));
+}
+</script>
+</body>
+</html>
