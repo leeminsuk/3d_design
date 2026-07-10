@@ -4,7 +4,10 @@
 
 **라이브 갤러리**: https://leeminsuk.github.io/3d_design/
 
-| # | 작품 | 컨셉 | 기법 |
-|---|------|------|------|
+**브랜치 정책**: 01은 `main`에, 02부터는 작품별 브랜치(`design/NN-slug`)에 올라갑니다.
+
+| # | 작품 | 컨셉 | 기법 | 위치 |
+|---|------|------|------|------|
+| 01 | [심해 개화 — Abyssal Bloom](https://leeminsuk.github.io/3d_design/01-abyssal-bloom.html) | 수심 4,000m의 발광 해파리 떼 | 커스텀 정점/프래그먼트 셰이더, 가산 블렌딩, UnrealBloom, 파티클 | `main` |
 
 > 각 작품은 렌더 검증(콘솔 에러 0, 스크린샷 확인) 후 커밋됩니다.

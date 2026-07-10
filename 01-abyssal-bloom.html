@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>심해 개화 — Abyssal Bloom</title>
+<link rel="icon" href="data:,">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Nanum+Myeongjo:wght@400;800&family=IBM+Plex+Mono:wght@300&display=swap" rel="stylesheet">
+<style>
+  :root { color-scheme: dark; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow: hidden; background: #020710; }
+  canvas { display: block; }
+  .ui { position: fixed; inset: 0; pointer-events: none; z-index: 2;
+        font-family: 'Nanum Myeongjo', serif; color: #cfeee8; }
+  .title { position: absolute; top: 48px; left: 44px;
+           writing-mode: vertical-rl; letter-spacing: 0.42em;
+           font-size: clamp(28px, 4.2vw, 46px); font-weight: 800;
+           color: #e8fffa; text-shadow: 0 0 24px rgba(72,245,216,.45); }
+  .sub { position: absolute; top: 50px; left: 100px;
+         writing-mode: vertical-rl; letter-spacing: 0.55em;
+         font-family: 'IBM Plex Mono', monospace; font-weight: 300;
+         font-size: 11px; color: #5da99c; text-transform: uppercase; }
+  .caption { position: absolute; right: 40px; bottom: 36px; text-align: right;
+             font-size: 13px; line-height: 2; color: #9ccec4; letter-spacing: .12em; }
+  .caption b { color: #48f5d8; font-weight: 400; }
+  .depth { position: absolute; left: 44px; bottom: 36px;
+           font-family: 'IBM Plex Mono', monospace; font-size: 11px;
+           letter-spacing: .3em; color: #3d7a70; }
+  .fallback { position: fixed; inset: 0; display: none; place-content: center;
+              text-align: center; color: #cfeee8; font-family: 'Nanum Myeongjo', serif;
+              background: radial-gradient(ellipse at 50% 120%, #06283a 0%, #020710 70%);
+              padding: 24px; line-height: 2; z-index: 3; }
+  @media (max-width: 640px) {
+    .title { top: 28px; left: 22px; }
+    .sub { left: 74px; top: 30px; }
+    .caption { right: 22px; bottom: 24px; font-size: 12px; }
+    .depth { left: 22px; bottom: 24px; }
+  }
+</style>
+</head>
+<body>
+<div class="ui">
+  <h1 class="title">심해 개화</h1>
+  <div class="sub">Abyssal Bloom · 光る海月</div>
+  <div class="caption">수심 4,000미터, 빛이 닿지 않는 곳에서<br>해파리는 <b>스스로 빛나는 꽃</b>이 된다</div>
+  <div class="depth" id="depth">DEPTH −4 000 M</div>
+</div>
+<div class="fallback" id="fallback">
+  <div>이 페이지는 WebGL이 필요합니다.<br>최신 브라우저에서 다시 열어 주세요.</div>
+</div>
+
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.184.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+} catch (e) {
+  document.getElementById('fallback').style.display = 'grid';
+  throw e;
+}
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x020710, 0.055);
+const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.1, 100);
+camera.position.set(0, 0, 11);
+
+/* ── 배경: 수직 그라데이션 돔 ───────────────────────────── */
+const bgGeo = new THREE.SphereGeometry(48, 24, 24);
+const bgMat = new THREE.ShaderMaterial({
+  side: THREE.BackSide, depthWrite: false, fog: false,
+  vertexShader: `varying vec3 vP; void main(){ vP = position;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+  fragmentShader: `varying vec3 vP;
+    void main(){
+      float h = clamp(vP.y / 48.0 * 0.5 + 0.5, 0.0, 1.0);
+      vec3 deep = vec3(0.004, 0.016, 0.038);
+      vec3 up   = vec3(0.015, 0.10, 0.13);
+      gl_FragColor = vec4(mix(deep, up, pow(h, 1.8)), 1.0);
+    }`
+});
+scene.add(new THREE.Mesh(bgGeo, bgMat));
+
+/* ── 해파리 ────────────────────────────────────────────── */
+const JELLY_COUNT = 7;
+const jellies = [];
+
+const bellVert = `
+  uniform float uTime, uPhase;
+  varying vec3 vN; varying vec3 vView; varying float vY;
+  void main(){
+    vec3 p = position;
+    float beat = sin(uTime * 1.7 + uPhase - p.y * 2.2);
+    p.xz *= 1.0 + 0.16 * beat * (1.0 - p.y * 0.4);
+    p.y  *= 1.0 - 0.10 * beat;
+    vY = p.y;
+    vec4 mv = modelViewMatrix * vec4(p, 1.0);
+    vN = normalize(normalMatrix * normal);
+    vView = normalize(-mv.xyz);
+    gl_Position = projectionMatrix * mv;
+  }`;
+const bellFrag = `
+  uniform vec3 uGlow; uniform float uTime, uPhase;
+  varying vec3 vN; varying vec3 vView; varying float vY;
+  void main(){
+    float fres = pow(1.0 - abs(dot(normalize(vN), normalize(vView))), 2.2);
+    float pulse = 0.75 + 0.25 * sin(uTime * 1.7 + uPhase);
+    vec3 col = uGlow * (fres * 1.6 + 0.06) * pulse;
+    col += uGlow * smoothstep(0.75, 1.0, vY) * 0.5 * pulse;
+    gl_FragColor = vec4(col, fres * 0.85 + 0.05);
+  }`;
+
+const tentVert = `
+  uniform float uTime, uPhase;
+  attribute float aT;      /* 0(부착점) → 1(끝) */
+  attribute float aAngle;
+  varying float vT;
+  void main(){
+    vT = aT;
+    vec3 p = position;
+    float sway = sin(uTime * 1.9 - aT * 5.5 + uPhase + aAngle * 2.0);
+    p.x += sway * aT * aT * 0.55 * cos(aAngle);
+    p.z += sway * aT * aT * 0.55 * sin(aAngle);
+    p.y += sin(uTime * 1.7 + uPhase) * aT * 0.18;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+  }`;
+const tentFrag = `
+  uniform vec3 uGlow;
+  varying float vT;
+  void main(){
+    float a = (1.0 - vT) * 0.55 + 0.03;
+    gl_FragColor = vec4(uGlow * (1.2 - vT * 0.7), a);
+  }`;
+
+const palette = [
+  new THREE.Color(0x48f5d8), new THREE.Color(0x53c8ff),
+  new THREE.Color(0xb47cff), new THREE.Color(0xff7ad9)
+];
+
+function makeJelly(i) {
+  const g = new THREE.Group();
+  const glow = palette[i % palette.length].clone();
+  const phase = Math.random() * Math.PI * 2;
+  const uniforms = {
+    uTime:  { value: 0 },
+    uPhase: { value: phase },
+    uGlow:  { value: glow }
+  };
+
+  const bellGeo = new THREE.SphereGeometry(1, 48, 28, 0, Math.PI * 2, 0, Math.PI * 0.58);
+  const bell = new THREE.Mesh(bellGeo, new THREE.ShaderMaterial({
+    uniforms, vertexShader: bellVert, fragmentShader: bellFrag,
+    transparent: true, blending: THREE.AdditiveBlending,
+    depthWrite: false, side: THREE.DoubleSide
+  }));
+  bell.rotation.x = Math.PI;    /* 돔이 위, 입구가 아래 */
+  bell.position.y = 0.3;
+  g.add(bell);
+
+  /* 촉수: 직선을 셰이더에서 흔든다 */
+  const T_COUNT = 14, SEG = 42;
+  const pos = [], aT = [], aAngle = [], idx = [];
+  for (let t = 0; t < T_COUNT; t++) {
+    const ang = (t / T_COUNT) * Math.PI * 2;
+    const r = 0.55 + Math.random() * 0.25;
+    const len = 2.6 + Math.random() * 1.6;
+    for (let s = 0; s <= SEG; s++) {
+      const k = s / SEG;
+      pos.push(Math.cos(ang) * r * (1 - k * 0.25), 0.15 - k * len, Math.sin(ang) * r * (1 - k * 0.25));
+      aT.push(k); aAngle.push(ang);
+      if (s < SEG) { const b = t * (SEG + 1) + s; idx.push(b, b + 1); }
+    }
+  }
+  const tGeo = new THREE.BufferGeometry();
+  tGeo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  tGeo.setAttribute('aT', new THREE.Float32BufferAttribute(aT, 1));
+  tGeo.setAttribute('aAngle', new THREE.Float32BufferAttribute(aAngle, 1));
+  tGeo.setIndex(idx);
+  const tent = new THREE.LineSegments(tGeo, new THREE.ShaderMaterial({
+    uniforms, vertexShader: tentVert, fragmentShader: tentFrag,
+    transparent: true, blending: THREE.AdditiveBlending, depthWrite: false
+  }));
+  g.add(tent);
+
+  /* 발광 코어 */
+  const core = new THREE.Mesh(
+    new THREE.SphereGeometry(0.22, 16, 16),
+    new THREE.MeshBasicMaterial({ color: glow, transparent: true, opacity: 0.9 })
+  );
+  core.position.y = 0.42;
+  g.add(core);
+
+  const s = 0.8 + Math.random() * 1.0;
+  g.scale.setScalar(s);
+  g.position.set((Math.random() - 0.5) * 14, (Math.random() - 0.5) * 14, (Math.random() - 0.5) * 8 - 1);
+  g.rotation.y = Math.random() * Math.PI * 2;
+
+  return { g, uniforms, phase,
+    speed: 0.24 + Math.random() * 0.3,
+    wanderX: Math.random() * Math.PI * 2,
+    wanderZ: Math.random() * Math.PI * 2,
+    scale: s };
+}
+
+for (let i = 0; i < JELLY_COUNT; i++) {
+  const j = makeJelly(i);
+  jellies.push(j);
+  scene.add(j.g);
+}
+
+/* ── 플랑크톤 입자 ─────────────────────────────────────── */
+const P_COUNT = 1100;
+const pGeo = new THREE.BufferGeometry();
+const pPos = new Float32Array(P_COUNT * 3);
+const pPhase = new Float32Array(P_COUNT);
+for (let i = 0; i < P_COUNT; i++) {
+  pPos[i * 3]     = (Math.random() - 0.5) * 30;
+  pPos[i * 3 + 1] = (Math.random() - 0.5) * 22;
+  pPos[i * 3 + 2] = (Math.random() - 0.5) * 20 - 2;
+  pPhase[i] = Math.random() * Math.PI * 2;
+}
+pGeo.setAttribute('position', new THREE.BufferAttribute(pPos, 3));
+pGeo.setAttribute('aPhase', new THREE.BufferAttribute(pPhase, 1));
+const pMat = new THREE.ShaderMaterial({
+  transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
+  uniforms: { uTime: { value: 0 } },
+  vertexShader: `
+    uniform float uTime; attribute float aPhase; varying float vA;
+    void main(){
+      vec3 p = position;
+      p.y += sin(uTime * 0.3 + aPhase) * 0.6 + uTime * 0.12;
+      p.y = mod(p.y + 11.0, 22.0) - 11.0;
+      p.x += sin(uTime * 0.2 + aPhase * 3.0) * 0.4;
+      vec4 mv = modelViewMatrix * vec4(p, 1.0);
+      float tw = 0.55 + 0.45 * sin(uTime * 2.0 + aPhase * 7.0);
+      vA = tw;
+      gl_PointSize = (0.9 + sin(aPhase * 13.0) * 0.5) * tw * (46.0 / -mv.z);
+      gl_Position = projectionMatrix * mv;
+    }`,
+  fragmentShader: `
+    varying float vA;
+    void main(){
+      float d = length(gl_PointCoord - 0.5);
+      float a = smoothstep(0.5, 0.05, d) * vA * 0.4;
+      gl_FragColor = vec4(0.45, 0.95, 0.85, a);
+    }`
+});
+scene.add(new THREE.Points(pGeo, pMat));
+
+/* ── 포스트: 블룸 ──────────────────────────────────────── */
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.8, 0.6, 0.18);
+composer.addPass(bloom);
+
+/* ── 인터랙션: 마우스 시차 + 깊이 카운터 ───────────────── */
+const mouse = new THREE.Vector2(0, 0);
+addEventListener('pointermove', e => {
+  mouse.x = (e.clientX / innerWidth - 0.5) * 2;
+  mouse.y = (e.clientY / innerHeight - 0.5) * 2;
+});
+const depthEl = document.getElementById('depth');
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+  composer.setSize(innerWidth, innerHeight);
+});
+
+const t0 = performance.now();
+let lastT = 0;
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+function tick() {
+  const t = (performance.now() - t0) / 1000;
+  const dt = Math.min(t - lastT, 0.05);
+  lastT = t;
+
+  for (const j of jellies) {
+    j.uniforms.uTime.value = t;
+    j.g.position.y += j.speed * dt * (0.7 + 0.5 * Math.sin(t * 1.7 + j.phase));
+    j.g.position.x += Math.sin(t * 0.23 + j.wanderX) * dt * 0.35;
+    j.g.position.z += Math.sin(t * 0.19 + j.wanderZ) * dt * 0.25;
+    j.g.rotation.y += dt * 0.06;
+    if (j.g.position.y > 9) { j.g.position.y = -10; j.g.position.x = (Math.random() - 0.5) * 16; }
+  }
+  pMat.uniforms.uTime.value = t;
+
+  camera.position.x += (mouse.x * 1.6 - camera.position.x) * 0.03;
+  camera.position.y += (-mouse.y * 1.1 - camera.position.y) * 0.03;
+  camera.lookAt(0, 0, 0);
+
+  depthEl.textContent = 'DEPTH −' + (4000 + Math.floor(Math.sin(t * 0.1) * 12)).toLocaleString('ko-KR').replace(/,/g, ' ') + ' M';
+
+  composer.render();
+}
+
+if (reduceMotion) {
+  tick();   /* 정지 1프레임 */
+} else {
+  renderer.setAnimationLoop(tick);
+}
+</script>
+</body>
+</html>
