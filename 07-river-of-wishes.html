@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>소원의 강 — River of Wishes</title>
+<link rel="icon" href="data:,">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Hahmlet:wght@300;600&family=IBM+Plex+Mono:wght@300&display=swap" rel="stylesheet">
+<style>
+  :root { color-scheme: dark; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; overflow: hidden; background: #050609; }
+  canvas { display: block; cursor: pointer; }
+  .ui { position: fixed; inset: 0; pointer-events: none; z-index: 2;
+        font-family: 'Hahmlet', serif; color: #efe6d8; }
+  .title { position: absolute; left: 48px; top: 46px; }
+  .title h1 { font-size: clamp(30px, 4.4vw, 48px); font-weight: 600;
+              letter-spacing: .28em; margin-right: -.28em; }
+  .title .en { margin-top: 10px; font-family: 'IBM Plex Mono', monospace;
+               font-size: 10px; font-weight: 300; letter-spacing: .5em;
+               color: #93816b; text-transform: uppercase; }
+  .caption { position: absolute; left: 48px; bottom: 46px; max-width: 340px;
+             font-weight: 300; font-size: 13.5px; line-height: 2.15;
+             letter-spacing: .04em; color: #c3b49e; word-break: keep-all; }
+  .caption b { font-weight: 600; color: #efe6d8; }
+  .board { position: absolute; right: 48px; bottom: 46px; text-align: right;
+           font-family: 'IBM Plex Mono', monospace; font-size: 11px;
+           font-weight: 300; letter-spacing: .22em; color: #93816b;
+           font-variant-numeric: tabular-nums; }
+  .board b { display: block; font-size: 24px; color: #ffd9a0; font-weight: 300;
+             margin-bottom: 6px; }
+  .fallback { position: fixed; inset: 0; display: none; place-content: center;
+              text-align: center; color: #efe6d8; background: #050609;
+              font-family: 'Hahmlet', serif; padding: 24px; line-height: 2; z-index: 3; }
+  @media (max-width: 640px) {
+    .title { left: 24px; top: 28px; }
+    .caption { left: 24px; bottom: 28px; font-size: 12px; max-width: 220px; }
+    .board { right: 24px; bottom: 28px; }
+  }
+</style>
+</head>
+<body>
+<div class="ui">
+  <div class="title">
+    <h1>소원의 강</h1>
+    <div class="en">River of Wishes</div>
+  </div>
+  <div class="caption">물 위에 놓은 등불 하나가 곧 소원 하나.<br>
+    <b>강물을 클릭</b>하면 당신의 등불이 떠오릅니다.</div>
+  <div class="board"><b id="n">0</b>떠오른 소원</div>
+</div>
+<div class="fallback" id="fallback">
+  <div>이 페이지는 WebGL이 필요합니다.<br>최신 브라우저에서 다시 열어 주세요.</div>
+</div>
+
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.184.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+
+let renderer;
+try {
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+} catch (e) {
+  document.getElementById('fallback').style.display = 'grid';
+  throw e;
+}
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x050609, 0.016);
+const camera = new THREE.PerspectiveCamera(48, innerWidth / innerHeight, 0.1, 400);
+camera.position.set(0, 3.2, 26);
+
+/* ══ 하늘: 남색 그라데이션 + 달 + 별 ═══════════════════ */
+{
+  const g = new THREE.SphereGeometry(220, 24, 16);
+  scene.add(new THREE.Mesh(g, new THREE.ShaderMaterial({
+    side: THREE.BackSide, depthWrite: false, fog: false,
+    vertexShader: `varying vec3 vP; void main(){ vP = position;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+    fragmentShader: `
+      varying vec3 vP;
+      float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+      void main(){
+        vec3 d = normalize(vP);
+        float h = clamp(d.y, 0.0, 1.0);
+        vec3 col = mix(vec3(0.055, 0.06, 0.10), vec3(0.012, 0.014, 0.035), pow(h, 0.55));
+        /* 별 */
+        vec2 g2 = d.xz / max(d.y + 0.28, 0.05) * 34.0;
+        vec2 id = floor(g2);
+        float st = hash(id);
+        vec2 fp = fract(g2) - 0.5;
+        col += vec3(0.9, 0.88, 0.82) * smoothstep(0.18, 0.0, length(fp)) * step(0.93, st)
+             * (0.25 + 0.55 * fract(st * 57.3)) * smoothstep(0.02, 0.25, d.y);
+        gl_FragColor = vec4(col, 1.0);
+      }`
+  })));
+
+  /* 보름달 */
+  const cv = document.createElement('canvas'); cv.width = cv.height = 256;
+  const ctx = cv.getContext('2d');
+  const grad = ctx.createRadialGradient(128, 128, 40, 128, 128, 128);
+  grad.addColorStop(0, 'rgba(255,244,214,1)');
+  grad.addColorStop(0.3, 'rgba(255,240,205,0.9)');
+  grad.addColorStop(0.45, 'rgba(240,225,190,0.22)');
+  grad.addColorStop(1, 'rgba(240,225,190,0)');
+  ctx.fillStyle = grad; ctx.fillRect(0, 0, 256, 256);
+  const moon = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: new THREE.CanvasTexture(cv), transparent: true, depthWrite: false, fog: false
+  }));
+  moon.scale.setScalar(30);
+  moon.position.set(-38, 26, -150);
+  scene.add(moon);
+}
+
+/* ══ 산 실루엣 (2겹) ═══════════════════════════════════ */
+function mountains(z, height, color, seedOff) {
+  const pts = [];
+  const W = 340, N = 90;
+  for (let i = 0; i <= N; i++) {
+    const x = (i / N - 0.5) * W;
+    let y = 0;
+    y += Math.sin(i * 0.23 + seedOff) * 0.55;
+    y += Math.sin(i * 0.071 + seedOff * 2.3) * 1.0;
+    y += Math.sin(i * 0.531 + seedOff * 0.7) * 0.18;
+    pts.push(new THREE.Vector2(x, (y * 0.5 + 0.85) * height));
+  }
+  const shape = new THREE.Shape();
+  shape.moveTo(-W / 2, -6);
+  pts.forEach(p => shape.lineTo(p.x, p.y));
+  shape.lineTo(W / 2, -6);
+  const m = new THREE.Mesh(new THREE.ShapeGeometry(shape),
+    new THREE.MeshBasicMaterial({ color, fog: false }));
+  m.position.z = z;
+  scene.add(m);
+}
+mountains(-120, 16, 0x0b0d16, 3.1);
+mountains(-90, 9, 0x070810, 7.7);
+
+/* ══ 강물: 달빛 길 + 등불 반영은 셰이더로 ═══════════════ */
+const LMAX = 260;                          /* 등불 최대 수 */
+const lightPos = new Float32Array(LMAX * 3);
+const lightCol = new Float32Array(LMAX * 3);
+let lightCount = 0;
+
+const waterUniforms = {
+  uTime: { value: 0 },
+  uMoonDir: { value: new THREE.Vector3(-38, 26, -150).normalize() },
+  uLights: { value: lightPos },
+  uLightCols: { value: lightCol },
+  uCount: { value: 0 }
+};
+{
+  const g = new THREE.PlaneGeometry(340, 200);
+  g.rotateX(-Math.PI / 2);
+  const water = new THREE.Mesh(g, new THREE.ShaderMaterial({
+    uniforms: waterUniforms,
+    fog: false,
+    vertexShader: `
+      varying vec3 vW;
+      void main(){
+        vW = (modelMatrix * vec4(position, 1.0)).xyz;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }`,
+      /* 반영: 각 등불에 대해 세로로 늘어진 일렁 스트릭 */
+    fragmentShader: `
+      uniform float uTime; uniform vec3 uMoonDir;
+      uniform vec3 uLights[${LMAX}]; uniform vec3 uLightCols[${LMAX}];
+      uniform int uCount;
+      varying vec3 vW;
+      float hash(vec2 p){ return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+      float noise2(vec2 p){
+        vec2 i = floor(p), f = fract(p);
+        vec2 u = f * f * (3.0 - 2.0 * f);
+        return mix(mix(hash(i), hash(i + vec2(1, 0)), u.x),
+                   mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), u.x), u.y);
+      }
+      void main(){
+        vec3 col = vec3(0.012, 0.018, 0.032);          /* 검은 강물 */
+        /* 잔물결 */
+        float rip = noise2(vW.xz * vec2(0.5, 1.4) + vec2(uTime * 0.15, uTime * 0.4));
+
+        /* 달빛 길: 카메라(z=26,x=0)와 달(z=-150,x=-38)을 잇는 밴드 */
+        float k = clamp((vW.z - 26.0) / (-176.0), 0.0, 1.0);
+        float cx = -38.0 * k;
+        float gl = exp(-abs(vW.x - cx) * (0.09 + k * 0.16));
+        gl *= smoothstep(30.0, -60.0, vW.z);
+        float sparkle = pow(noise2(vW.xz * vec2(1.4, 3.0) + vec2(0.0, uTime * 0.7)), 3.0);
+        col += vec3(0.85, 0.78, 0.58) * gl * (0.10 + sparkle * 0.9) * 0.55;
+
+        /* 등불 반영 */
+        for (int i = 0; i < ${LMAX}; i++){
+          if (i >= uCount) break;
+          vec3 L = uLights[i];
+          vec2 d = vW.xz - L.xz;
+          /* 카메라 쪽으로 늘어진 스트릭: z+ 방향 */
+          float wob = (noise2(vec2(L.x * 3.7, vW.z * 1.3 + uTime * 0.8)) - 0.5) * 0.9;
+          float sx = exp(-abs(d.x + wob) * 2.6);
+          float sz = exp(-max(d.y, 0.0) * 0.55) * step(-0.4, d.y);
+          float tw = 0.75 + 0.25 * sin(uTime * 3.0 + L.x * 13.0);
+          col += uLightCols[i] * sx * sz * tw * 0.26 * (0.45 + rip * 0.8);
+        }
+
+        /* 원경 안개 */
+        col = mix(col, vec3(0.02, 0.024, 0.04), smoothstep(-40.0, -150.0, vW.z));
+        gl_FragColor = vec4(col, 1.0);
+      }`
+  }));
+  scene.add(water);
+}
+
+/* ══ 연등: 인스턴스 (본체 + 불빛) ═══════════════════════ */
+/* 종이 연꽃등: 팔각 컵 모양 */
+const lanternGeo = new THREE.CylinderGeometry(0.34, 0.18, 0.34, 8, 1, true);
+const lanternUniforms = { uTime: { value: 0 } };
+const lanternMat = new THREE.ShaderMaterial({
+  uniforms: lanternUniforms,
+  side: THREE.DoubleSide,
+  transparent: false,
+  vertexShader: `
+    uniform float uTime;
+    attribute float aPhase; attribute vec3 aTint;
+    varying vec2 vUv; varying vec3 vTint; varying float vFlick;
+    void main(){
+      vUv = uv; vTint = aTint;
+      vFlick = 0.8 + 0.2 * sin(uTime * (2.2 + fract(aPhase) * 2.0) + aPhase * 30.0);
+      vec4 wp = instanceMatrix * vec4(position, 1.0);
+      /* 물결 따라 흔들림 */
+      wp.y += sin(uTime * 0.9 + aPhase * 17.0) * 0.05;
+      wp.x += sin(uTime * 0.6 + aPhase * 11.0) * 0.05;
+      gl_Position = projectionMatrix * viewMatrix * wp;
+    }`,
+  fragmentShader: `
+    varying vec2 vUv; varying vec3 vTint; varying float vFlick;
+    void main(){
+      /* 종이를 투과하는 촛불: 아래가 밝다 */
+      float glow = mix(1.5, 0.4, vUv.y);
+      vec3 col = vTint * glow * vFlick;
+      /* 세로 접이 주름 */
+      col *= 0.85 + 0.15 * sin(vUv.x * 50.2);
+      gl_FragColor = vec4(col, 1.0);
+    }`
+});
+const lanterns = new THREE.InstancedMesh(lanternGeo, lanternMat, LMAX);
+lanterns.count = 0;
+lanterns.frustumCulled = false;
+const phases = new Float32Array(LMAX);
+const tints = new Float32Array(LMAX * 3);
+lanternGeo.setAttribute('aPhase', new THREE.InstancedBufferAttribute(phases, 1));
+lanternGeo.setAttribute('aTint', new THREE.InstancedBufferAttribute(tints, 3));
+scene.add(lanterns);
+
+/* 불빛 스프라이트 (가산 글로우) */
+const glowCv = document.createElement('canvas'); glowCv.width = glowCv.height = 128;
+{
+  const ctx = glowCv.getContext('2d');
+  const gr = ctx.createRadialGradient(64, 64, 4, 64, 64, 64);
+  gr.addColorStop(0, 'rgba(255,214,150,0.65)');
+  gr.addColorStop(0.35, 'rgba(255,190,110,0.18)');
+  gr.addColorStop(1, 'rgba(255,180,90,0)');
+  ctx.fillStyle = gr; ctx.fillRect(0, 0, 128, 128);
+}
+const glowTex = new THREE.CanvasTexture(glowCv);
+const glowGeo = new THREE.PlaneGeometry(1.05, 1.05);
+const glowMat = new THREE.MeshBasicMaterial({
+  map: glowTex, transparent: true, blending: THREE.AdditiveBlending,
+  depthWrite: false, fog: false
+});
+const glows = new THREE.InstancedMesh(glowGeo, glowMat, LMAX);
+glows.count = 0;
+glows.frustumCulled = false;
+scene.add(glows);
+
+/* ══ 등불 데이터 ═══════════════════════════════════════ */
+const boats = [];    /* {x, z, speed, phase, tint} */
+const TINTS = [
+  [1.0, 0.62, 0.30], [1.0, 0.52, 0.38], [0.95, 0.72, 0.34],
+  [0.85, 0.5, 0.55], [0.7, 0.62, 0.85]
+];
+let seed = 7;
+function rnd() { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; }
+
+function addLantern(x, z, announced) {
+  const tint = TINTS[Math.floor(rnd() * TINTS.length)];
+  const b = {
+    x, z,
+    speed: 0.35 + rnd() * 0.4,
+    drift: (rnd() - 0.5) * 0.14,
+    phase: rnd() * 100,
+    tint
+  };
+  if (boats.length >= LMAX) boats.shift();
+  boats.push(b);
+  if (announced) {
+    wishes++;
+    document.getElementById('n').textContent = wishes.toLocaleString('ko-KR');
+  }
+}
+
+let wishes = 0;
+/* 초기 무리 */
+for (let i = 0; i < 150; i++) {
+  addLantern((rnd() - 0.5) * 120, -110 + rnd() * 125, false);
+}
+
+/* 클릭 → 소원 */
+const raycaster = new THREE.Raycaster();
+const waterPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+addEventListener('pointerdown', e => {
+  const ndc = new THREE.Vector2((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+  raycaster.setFromCamera(ndc, camera);
+  const hit = new THREE.Vector3();
+  if (raycaster.ray.intersectPlane(waterPlane, hit) && Math.abs(hit.x) < 160 && hit.z > -140 && hit.z < 24) {
+    addLantern(hit.x, hit.z, true);
+  }
+});
+
+const mouse = new THREE.Vector2(0, 0);
+addEventListener('pointermove', e => {
+  mouse.set((e.clientX / innerWidth - 0.5) * 2, (e.clientY / innerHeight - 0.5) * 2);
+});
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+  composer.setSize(innerWidth, innerHeight);
+});
+
+/* ══ 포스트 ═════════════════════════════════════════════ */
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+composer.addPass(new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.5, 0.75, 0.6));
+
+/* ══ 루프 ═══════════════════════════════════════════════ */
+const M = new THREE.Matrix4(), Q = new THREE.Quaternion(), S = new THREE.Vector3(1, 1, 1), P = new THREE.Vector3();
+const t0 = performance.now();
+let lastT = 0;
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+function frame(t, dt) {
+  lanternUniforms.uTime.value = t;
+  waterUniforms.uTime.value = t;
+
+  /* 등불 이동 (관객 쪽으로 흘러온다) */
+  for (const b of boats) {
+    b.z += b.speed * dt;
+    b.x += b.drift * dt;
+    if (b.z > 26) { b.z = -128 - rnd() * 12; b.x = (rnd() - 0.5) * 120; }
+  }
+
+  /* 인스턴스 갱신 */
+  const n = boats.length;
+  for (let i = 0; i < n; i++) {
+    const b = boats[i];
+    P.set(b.x, 0.16, b.z);
+    M.compose(P, Q, S);
+    lanterns.setMatrixAt(i, M);
+    phases[i] = b.phase;
+    tints[i * 3] = b.tint[0]; tints[i * 3 + 1] = b.tint[1]; tints[i * 3 + 2] = b.tint[2];
+
+    P.set(b.x, 0.45, b.z);
+    M.compose(P, camera.quaternion, S);   /* 빌보드 */
+    glows.setMatrixAt(i, M);
+
+    if (i < LMAX) {
+      lightPos[i * 3] = b.x; lightPos[i * 3 + 1] = 0.3; lightPos[i * 3 + 2] = b.z;
+      lightCol[i * 3] = b.tint[0]; lightCol[i * 3 + 1] = b.tint[1]; lightCol[i * 3 + 2] = b.tint[2];
+    }
+  }
+  lanterns.count = n;
+  glows.count = n;
+  lanterns.instanceMatrix.needsUpdate = true;
+  glows.instanceMatrix.needsUpdate = true;
+  lanternGeo.attributes.aPhase.needsUpdate = true;
+  lanternGeo.attributes.aTint.needsUpdate = true;
+  waterUniforms.uCount.value = n;
+
+  camera.position.x += (mouse.x * 2.2 - camera.position.x) * 0.02;
+  camera.position.y += (3.2 - mouse.y * 0.9 - camera.position.y) * 0.02;
+  camera.lookAt(0, 1.1, -30);
+
+  composer.render();
+}
+
+function tick() {
+  const t = (performance.now() - t0) / 1000;
+  const dt = Math.min(t - lastT, 1 / 20);
+  lastT = t;
+  frame(t, dt);
+}
+
+if (reduceMotion) {
+  frame(3, 0.016);
+} else {
+  renderer.setAnimationLoop(tick);
+}
+</script>
+</body>
+</html>
